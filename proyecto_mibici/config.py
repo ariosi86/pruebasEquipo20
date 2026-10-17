@@ -69,10 +69,17 @@ DATA_URLS = {
     "2025-10": f"{MIBICI_HOST}/site/assets/files/115104/datos_abiertos_2025_10.csv",
     "2025-11": f"{MIBICI_HOST}/site/assets/files/116773/datos_abiertos_2025_11.csv",
     "2025-12": f"{MIBICI_HOST}/site/assets/files/118153/datos_abiertos_2025_12.csv",
+
+    #Año 2026 (9 meses cerrados hasta septiembre)
     "2026-01": f"{MIBICI_HOST}/site/assets/files/120163/datos_abiertos_2026_01.csv",
     "2026-02": f"{MIBICI_HOST}/site/assets/files/121761/datos_abiertos_2026_02.csv",
     "2026-03": f"{MIBICI_HOST}/site/assets/files/123236/datos_abiertos_2026_03.csv",
     "2026-04": f"{MIBICI_HOST}/site/assets/files/124927/datos_abiertos_2026_04.csv",
+    "2026-05": f"{MIBICI_HOST}/site/assets/files/125943/datos_abiertos_2026_05.csv",
+    "2026-06": f"{MIBICI_HOST}/site/assets/files/127734/datos_abiertos_2026_06.csv",
+    "2026-07": f"{MIBICI_HOST}/site/assets/files/129006/datos_abiertos_2026_07.csv",
+    "2026-08": f"{MIBICI_HOST}/site/assets/files/130362/datos_abiertos_2026_08.csv",
+    "2026-09": f"{MIBICI_HOST}/site/assets/files/131825/datos_abiertos_2026_09.csv",
     }
 }
 
