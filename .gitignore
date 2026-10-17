@@ -210,3 +210,4 @@ models/*.joblib
 mlruns/
 mlartifacts/
 .env
+mlflow.db
