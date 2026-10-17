@@ -80,6 +80,7 @@ DATA_URLS = {
     "2026-07": f"{MIBICI_HOST}/site/assets/files/129006/datos_abiertos_2026_07.csv",
     "2026-08": f"{MIBICI_HOST}/site/assets/files/130362/datos_abiertos_2026_08.csv",
     "2026-09": f"{MIBICI_HOST}/site/assets/files/131825/datos_abiertos_2026_09.csv",
+    
     }
 }
 
