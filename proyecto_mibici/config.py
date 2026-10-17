@@ -32,6 +32,7 @@ TRIPS_PROCESSED_PATH = PROCESSED_DATA_DIR / "trips.parquet"
 RANDOM_SEED = 42
 MLFLOW_EXPERIMENT_NAME = "mibici-equipo20"
 
+URI_MLFLOW_TRACKING = "http://localhost:8080"
 
 # ==========================================
 # 3. FUENTES Y ENLACES DE DESCARGA DIRECTA
@@ -93,3 +94,20 @@ try:
     logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
 except ModuleNotFoundError:
     pass
+
+# ==========================================
+# 4. P1: DEMANDA HORARIA
+# ==========================================
+P1_TARGET = "target_next_hour"
+P1_MAX_PCT_VACIAS = 90
+
+# Partición temporal, sobre la hora objetivo (target_hour)
+P1_VAL_INICIO = "2026-01-01"
+P1_TEST_INICIO = "2026-05-01"
+P1_TEST_FIN = "2026-10-01"
+
+P1_FEATURES_V1 = [
+    "lag_1h", "lag_24h", "lag_168h",
+    "target_hour_sin", "target_hour_cos", "target_is_weekend",
+]
+P1_FEATURES_V2 = P1_FEATURES_V1 + ["rolling_3h", "rolling_168h"]

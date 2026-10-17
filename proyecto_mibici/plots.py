@@ -1,29 +1,34 @@
-from pathlib import Path
-
-from loguru import logger
-from tqdm import tqdm
-import typer
-
-from proyecto_mibici.config import FIGURES_DIR, PROCESSED_DATA_DIR
-
-app = typer.Typer()
+import matplotlib
+matplotlib.use("Agg")  
+import matplotlib.pyplot as plt
+import pandas as pd
 
 
-@app.command()
-def main(
-    # ---- REPLACE DEFAULT PATHS AS APPROPRIATE ----
-    input_path: Path = PROCESSED_DATA_DIR / "dataset.csv",
-    output_path: Path = FIGURES_DIR / "plot.png",
-    # -----------------------------------------
-):
-    # ---- REPLACE THIS WITH YOUR OWN CODE ----
-    logger.info("Generating plot from data...")
-    for i in tqdm(range(10), total=10):
-        if i == 5:
-            logger.info("Something happened for iteration 5.")
-    logger.success("Plot generation complete.")
-    # -----------------------------------------
+def figuras_p1(df_test, pred, target, etiqueta, estacion_id=51):
+    """Penitenciaría (primera semana del test) y dispersión global real vs. predicho."""
+    res = df_test[["origen_id", "target_hour", target]].copy()
+    res["pred"] = pred
 
+    # Penitenciaría: primera semana del test
+    g = res[res["origen_id"] == estacion_id].sort_values("target_hour")
+    g = g[g["target_hour"] < g["target_hour"].min() + pd.Timedelta(days=7)]
+    fig1, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(g["target_hour"], g[target], label="Viajes reales")
+    ax.plot(g["target_hour"], g["pred"], label="Viajes predichos")
+    ax.set_title(f"Demanda real vs. predicha, López Cotilla / Penitenciaría ({etiqueta})")
+    ax.set_xlabel("Hora"); ax.set_ylabel("Número de viajes"); ax.legend()
+    ax.tick_params(axis="x", rotation=45)
+    fig1.tight_layout()
 
-if __name__ == "__main__":
-    app()
+    # Dispersión global: real vs. predicho (test)
+    fig2, ax = plt.subplots(figsize=(7, 7))
+    y_real = df_test[target].to_numpy()
+    ax.scatter(y_real, pred, alpha=0.15, s=8)
+    lim = max(y_real.max(), pred.max())
+    ax.plot([0, lim], [0, lim], linestyle="--", label="Predicción perfecta")
+    ax.set_title(f"Viajes reales vs. predichos, Test ({etiqueta})")
+    ax.set_xlabel("Viajes reales"); ax.set_ylabel("Viajes predichos"); ax.legend()
+    fig2.tight_layout()
+
+    return {f"penitenciaria_real_vs_pred_{etiqueta}": fig1,
+            f"scatter_test_{etiqueta}": fig2}
