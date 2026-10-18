@@ -1,33 +1,37 @@
-from pathlib import Path
-from typing import List
-
-from loguru import logger
-from tqdm import tqdm
-import typer
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Módulo centralizado de ingesta, procesamiento primario y versionado de datos para MiBici.
+Descarga datos abiertos, procesa viajes y estaciones a Parquet y genera manifest.json.
+Ejecución: python -m proyecto_mibici.dataset
+"""
 
 import hashlib
 import json
+from pathlib import Path
+from typing import List
+from urllib.parse import urlparse
+
+from loguru import logger
 import pandas as pd
 import requests
-from urllib.parse import urlparse
-import re
+from tqdm import tqdm
+import typer
 
-#from proyecto_mibici.config import PROCESSED_DATA_DIR, RAW_DATA_DIR
 from proyecto_mibici.config import (
-    PROJ_ROOT,
     DATA_URLS,
+    DEFAULT_HEADERS,
     MANIFEST_PATH,
     PROCESSED_DATA_DIR,
+    PROJ_ROOT,
     RAW_DATA_DIR,
     STATIONS_PROCESSED_PATH,
     TRIPS_PROCESSED_PATH,
-    DEFAULT_HEADERS
 )
 
 
-#Calcula el hash SHA256 para garantizar reproducibilidad e inmutabilidad.
 def compute_sha256(filepath: Path) -> str:
-
+    """Calcula el hash SHA256 para garantizar reproducibilidad e inmutabilidad."""
     hasher = hashlib.sha256()
     with open(filepath, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
@@ -35,16 +39,15 @@ def compute_sha256(filepath: Path) -> str:
     return hasher.hexdigest()
 
 
-#Descarga el archivo si no existe previamente.
 def download_file(url: str, destination_path: Path) -> Path:
+    """Descarga el archivo si no existe previamente."""
     if destination_path.exists():
         logger.info(f"El archivo ya existe: {destination_path.name}")
         return destination_path
 
     destination_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info(f"Descargando {destination_path.name}...")
-    #Son archivos pequeños deben descargarse en menos de 90 segundos
-    response = requests.get(url, headers=DEFAULT_HEADERS,stream=True, timeout=90)
+    response = requests.get(url, headers=DEFAULT_HEADERS, stream=True, timeout=90)
     response.raise_for_status()
 
     total_size = int(response.headers.get("content-length", 0))
@@ -75,11 +78,12 @@ def clean_column_names(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def read_csv_flexible(file_path: Path) -> pd.DataFrame:
-    """Lee CSV probando utf-8 y latin-1."""
+    """Lee CSV probando utf-8 y latin-1 para sortear bytes conflictivos (0xf1)."""
     try:
         return pd.read_csv(file_path, encoding="utf-8")
     except UnicodeDecodeError:
         return pd.read_csv(file_path, encoding="latin-1")
+
 
 def process_stations(stations_file: Path) -> pd.DataFrame:
     """Procesa el catálogo de estaciones manteniendo los nombres originales del CSV."""
@@ -106,7 +110,7 @@ def process_stations(stations_file: Path) -> pd.DataFrame:
             .astype("int32")
         )
 
-    # 4. Columnas atómicas auxiliares derivadas de 'name' (preservando 'name' intacto)
+    # 4. Columnas atómicas auxiliares derivadas de 'name'
     if "name" in df.columns:
         df["station_code"] = df["name"].str.extract(r"\((.*?)\)", expand=False).fillna("")
         df["municipality_code"] = df["station_code"].str.split("-").str[0].fillna("")
@@ -118,9 +122,11 @@ def process_stations(stations_file: Path) -> pd.DataFrame:
         )
 
     # Exportar a Parquet
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(STATIONS_PROCESSED_PATH, index=False)
     logger.success(f"Estaciones guardadas: {len(df)} registros -> {STATIONS_PROCESSED_PATH.name}")
     return df
+
 
 def process_trips(downloaded_paths: List[Path]) -> pd.DataFrame:
     """Concatena los CSVs mensuales y exporta a trips.parquet manteniendo nombres originales."""
@@ -129,6 +135,7 @@ def process_trips(downloaded_paths: List[Path]) -> pd.DataFrame:
     for f in downloaded_paths:
         temp_df = read_csv_flexible(f)
         temp_df = clean_column_names(temp_df)
+        temp_df["periodo"] = f.stem.replace("datos_abiertos_", "")
         dfs.append(temp_df)
 
     df = pd.concat(dfs, ignore_index=True)
@@ -157,8 +164,35 @@ def process_trips(downloaded_paths: List[Path]) -> pd.DataFrame:
         df["viaje_id"] = pd.to_numeric(df["viaje_id"], errors="coerce").fillna(-1).astype("int64")
 
     # Guardar en Parquet
+    PROCESSED_DATA_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(TRIPS_PROCESSED_PATH, index=False)
     logger.success(f"Viajes procesados: {len(df):,} filas -> {TRIPS_PROCESSED_PATH.name}")
+
+
+    # ==========================================
+    # GENERACIÓN DE PARTICIONES DE MODELADO
+    # ==========================================
+    # 1. Train: Año 2025 completo (2025-01-01 a 2025-12-31)
+    from proyecto_mibici.config import TRIPS_TRAIN_PATH, TRIPS_TEST_PATH
+    
+    df_train_2025 = df[
+        (df["inicio_del_viaje"] >= "2025-01-01") & 
+        (df["inicio_del_viaje"] < "2026-01-01")
+    ]
+    TRIPS_TRAIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df_train_2025.to_parquet(TRIPS_TRAIN_PATH, index=False)
+    logger.success(f"Train 2025 guardado: {len(df_train_2025):,} filas -> {TRIPS_TRAIN_PATH}")
+
+    # 2. Test: Abril a Septiembre 2026 (2026-04-01 a 2026-09-30)
+    df_test_2026 = df[
+        (df["inicio_del_viaje"] >= "2026-04-01") & 
+        (df["inicio_del_viaje"] <= "2026-09-30 23:59:59")
+    ]
+    TRIPS_TEST_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df_test_2026.to_parquet(TRIPS_TEST_PATH, index=False)
+    logger.success(f"Test (Abr-Sep 2026) guardado: {len(df_test_2026):,} filas -> {TRIPS_TEST_PATH}")
+
+
     return df
 
 
@@ -182,10 +216,10 @@ def generate_manifest(trips_df: pd.DataFrame, stations_df: pd.DataFrame) -> None
         },
     }
 
+    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(MANIFEST_PATH, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=4)
     logger.success(f"Manifiesto guardado en: {MANIFEST_PATH}")
-
 
 
 app = typer.Typer()
@@ -193,14 +227,14 @@ app = typer.Typer()
 
 @app.command()
 def main():
-
+    # 1. Estaciones
     stations_url = DATA_URLS["stations"]
     stations_filename = Path(urlparse(stations_url).path).name
-    stations_local = RAW_DATA_DIR /stations_filename
+    stations_local = RAW_DATA_DIR / stations_filename
     download_file(stations_url, stations_local)
     stations_df = process_stations(stations_local)
 
-    # 2. Viajes 2025
+    # 2. Viajes
     trip_files = []
     for period, url in DATA_URLS["trips"].items():
         trip_filename = Path(urlparse(url).path).name
@@ -211,8 +245,7 @@ def main():
         except Exception as e:
             logger.error(f"Error descargando {period}: {e}")
 
-    
-   # 3. Guardar Parquet y Manifiesto
+    # 3. Guardar Parquet y Manifiesto
     trips_df = process_trips(trip_files)
     generate_manifest(trips_df, stations_df)
 

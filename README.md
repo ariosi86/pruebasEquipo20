@@ -1,343 +1,327 @@
-# TC5061-Proyecto-Equipo20
+# TC5061 - Proyecto MiBici (Equipo 20)
 
-
-Diseñar, como equipo, una propuesta de solución de Machine Learning para un conjunto de preguntas sobre el sistema de bicicleta pública MiBici, que combine modelos de regresión, clasificación y clustering.
-
-## Project Organization
-
-```
-├── LICENSE            <- Open-source license if one is chosen
-├── Makefile           <- Makefile with convenience commands like `make data` or `make train`
-├── README.md          <- The top-level README for developers using this project.
-├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.
-│
-├── docs               <- A default mkdocs project; see www.mkdocs.org for details
-│
-├── models             <- Trained and serialized models, model predictions, or model summaries
-│
-├── notebooks          <- Jupyter notebooks. Naming convention is a number (for ordering),
-│                         the creator's initials, and a short `-` delimited description, e.g.
-│                         `1.0-jqp-initial-data-exploration`.
-│
-├── pyproject.toml     <- Project configuration file with package metadata for 
-│                         proyecto_mibici and configuration for tools like black
-│
-├── references         <- Data dictionaries, manuals, and all other explanatory materials.
-│
-├── reports            <- Generated analysis as HTML, PDF, LaTeX, etc.
-│   └── figures        <- Generated graphics and figures to be used in reporting
-│
-├── requirements.txt   <- The requirements file for reproducing the analysis environment, e.g.
-│                         generated with `pip freeze > requirements.txt`
-│
-├── setup.cfg          <- Configuration file for flake8
-│
-└── proyecto_mibici   <- Source code for use in this project.
-    │
-    ├── __init__.py             <- Makes proyecto_mibici a Python module
-    │
-    ├── config.py               <- Store useful variables and configuration
-    │
-    ├── dataset.py              <- Scripts to download or generate data
-    │
-    ├── features.py             <- Code to create features for modeling
-    │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- Code to run model inference with trained models          
-    │   └── train.py            <- Code to train models
-    │
-    └── plots.py                <- Code to create visualizations
-```
-
---------
-
-# Guía Rápida para el Equipo: Clonación, Entorno Virtual, Datos y Notebooks (MiBici)
-
-Esta guía paso a paso contiene todo lo necesario para que cualquier integrante del equipo clone el repositorio, configure su entorno virtual utilizando **`requirements.txt`**, ejecute la ingesta de datos y comience a trabajar en su Jupyter Notebook con el código listo para las tres preguntas (**P1**, **P2** y **P3**).
+Solución integral de Machine Learning para el análisis, modelado predictivo y segmentación funcional del sistema de bicicleta pública compartida **MiBici** (Área Metropolitana de Guadalajara). El proyecto resuelve tres problemáticas operativas centrales combinando regresión, clasificación y clustering bajo estándares de MLOps: programación orientada a objetos (POO), Pipelines formales de scikit-learn, versionado criptográfico de datos, serialización defensiva, interfaces CLI con Typer y seguimiento de experimentos con MLflow.
 
 ---
 
-## 1. Clonar el Repositorio y Configurar el Entorno Virtual
+## 1. Alcance de las Preguntas del Proyecto
 
-Sigue estos comandos en tu terminal según tu sistema operativo. Asegúrate de tener instalado **Python 3.10 o 3.11**.
+| Pregunta | Tipo de Problema | Objetivo de Negocio / Técnico | Algoritmo y Pipeline |
+|---|---|---|---|
+| **P1** | Regresión Temporal | Estimar el volumen de demanda horaria de viajes por estación para la hora inmediata ($t+1$). | `StandardScaler` + `LinearRegression` con cota inferior recortada en $\ge 0$. |
+| **P2** | Clasificación Binaria | Predecir si una estación entrará en estado de desbalance crítico (vacía o saturada) en $t+1$. | `StandardScaler` + `LogisticRegression` balanceada con umbral de decisión operativo calibrable. |
+| **P3** | Clustering No Supervisado | Identificar perfiles funcionales de uso en estaciones y contrastar el agrupamiento contra la división municipal (línea base). | `StandardScaler` + `KMeans` ($K=4$) evaluado con coeficientes de Silhouette y Davies-Bouldin. |
+
+---
+
+## 2. Organización del Repositorio
+
+La arquitectura del proyecto sigue la estructura estándar de **Cookiecutter Data Science** con modularización independiente por pregunta:
+
+```text
+├── LICENSE                      <- Licencia de código abierto del proyecto
+├── Makefile                     <- Comandos automatizados de apoyo (make data, make train)
+├── README.md                    <- Documentación principal del repositorio
+├── pyproject.toml               <- Metadatos del paquete local y configuración de herramientas
+├── requirements.txt             <- Librerías y versiones fijadas del entorno de ejecución
+├── setup.cfg                    <- Configuración de linters de código (flake8, black)
+│
+├── data/
+│   ├── external/                <- Datos provenientes de fuentes externas secundarias
+│   ├── interim/                 <- Datos intermedios en proceso de transformación
+│   ├── processed/               <- Parquets procesados canónicos (trips.parquet y stations.parquet)
+│   │   ├── train/               <- Partición de entrenamiento (Año 2025 completo)
+│   │   └── test/                <- Partición de prueba (Abril a Septiembre de 2026)
+│   ├── raw/                     <- Archivos CSV mensuales originales de MiBici (inmutables)
+│   └── manifest.json            <- Registro criptográfico SHA-256 para validación de datos
+│
+├── docs/                        <- Documentación técnica extendida, model cards y guías metodológicas
+├── models/                      <- Modelos y pipelines serializados en formato .pkl
+├── notebooks/                   <- Jupyter Notebooks de análisis exploratorio (P1, P2 y P3)
+├── references/                  <- Diccionarios de datos y manuales explicativos
+├── reports/                     <- Tablas comparativas de métricas (.csv) y reportes generados
+│   └── figures/                 <- Gráficas exportadas para reportes
+│
+├── tests/                       <- Suite de pruebas de integración y validación con pytest
+│   └── test_pipeline.py         <- Pruebas unitarias de artefactos, modelos y pipelines
+│
+└── proyecto_mibici/             <- Paquete principal de Python
+    ├── __init__.py              <- Metadatos del módulo principal (__version__, __author__)
+    ├── config.py                <- Rutas resueltas con pathlib, constantes, URLs y semillas
+    ├── dataset.py               <- Pipeline CLI para descarga, limpieza inicial y exportación a Parquet
+    ├── features.py              <- Fachada unificada que expone la API pública de características
+    ├── features_p1.py           <- Malla horaria, rezagos (1h, 24h, 168h), ventanas móviles y variables cíclicas
+    ├── features_p2.py           <- Balance por día operativo (inicio 03:00 hrs) y estrés relativo
+    ├── features_p3.py           <- Perfiles anuales de uso, distribuciones horarias y balance neto
+    ├── pipeline.py              <- Orquestador maestro End-to-End (Datos + Train + Predict + Testing)
+    ├── plots.py                 <- Visualizaciones generadas sobre backend headless 'Agg'
+    └── modeling/
+        ├── __init__.py          <- Exposición de las clases POO de modelado
+        ├── model_p1.py          <- Clase POO DemandaLinealP1 (StandardScaler + LinearRegression)
+        ├── model_p2.py          <- Clase POO RiesgoLogisticoP2 (StandardScaler + LogisticRegression)
+        ├── model_p3.py          <- Clase POO ClusterEstacionesP3 (StandardScaler + KMeans)
+        ├── train_p1.py          <- Script CLI de entrenamiento, evaluación y registro en MLflow (P1)
+        ├── train_p2.py          <- Script CLI de entrenamiento, evaluación y registro en MLflow (P2)
+        ├── train_p3.py          <- Script CLI de entrenamiento, contraste baseline y MLflow (P3)
+        ├── predict_p1.py        <- Script CLI para inferencia sobre demanda horaria (P1)
+        ├── predict_p2.py        <- Script CLI para inferencia sobre riesgo de desbalance (P2)
+        ├── predict_p3.py        <- Script CLI para inferencia de clusters funcionales (P3)
+        └── tracking.py          <- Módulo de integración defensiva con MLflow Tracking
+```
+
+---
+
+## 3. Descripción de los Módulos de Código (`proyecto_mibici/`)
+
+- **`config.py`**: Centraliza rutas absolutas mediante `pathlib.Path`, URLs de descarga de datos abiertos, semillas aleatorias (`RANDOM_SEED`), hiperparámetros base (`P2_UMBRAL`, `P3_K_ELEGIDO`), nombres de columnas predictoras y configuración de conexión a MLflow (`URI_MLFLOW_TRACKING`, `MLFLOW_EXPERIMENT_NAME`).
+- **`dataset.py`**: Ejecuta el flujo ETL primario. Descarga el catálogo de estaciones y los registros históricos de viajes, maneja codificaciones conflictivas (`utf-8` / `latin-1`), normaliza nombres de columnas, tipa identificadores y fechas, exporta los archivos maestros `trips.parquet`, `stations.parquet` junto con las particiones específicas de entrenamiento (`trips_train_2025.parquet`) y prueba (`trips_test_2026_04_09.parquet`), y construye el archivo `data/manifest.json` con hashes SHA-256.
+- **`features.py` (Fachada) y `features_p1.py`, `features_p2.py`, `features_p3.py`**: Implementan transformadores orientados a objetos compatibles con scikit-learn (`BaseEstimator`, `TransformerMixin`) junto con sus funciones orquestadoras:
+  * **`features_p1.py`**: `LimpiadorFiltroEstacionesP1` y `GeneradorDemandaLagsP1` construyen la serie horaria completa rellenando horas sin viajes con cero, calculan rezagos (`lag_1h`, `lag_24h`, `lag_168h`), promedios móviles (`rolling_3h`, `rolling_168h`) y codificación trigonométrica del ciclo diario (`sin`/`cos`).
+  * **`features_p2.py`**: `LimpiadorFlujoP2` y `ConstructorSerieRiesgoP2` eliminan viajes anómalos (<10 segundos entre estaciones distintas), estructuran el día operativo con corte a las 03:00 hrs, calculan el balance acumulado respecto a la capacidad instalada (`dpcapacity`) y etiquetan el estado de riesgo para la hora $t+1$.
+  * **`features_p3.py`**: `LimpiadorPerfilP3` depura duraciones fuera de rango (>180 min) y sintetiza el comportamiento anual de cada estación en proporciones de uso por bloque horario, porcentaje de viajes en fin de semana, duración media, volumen diario en escala logarítmica y balance neto relativo.
+- **`pipeline.py`**: Orquestador maestro que automatiza todo el ciclo End-to-End del proyecto en secuencia (Ingesta ETL, entrenamiento de P1, P2 y P3 con registro en MLflow, inferencia CLI de prueba y suite de validación con `pytest`).
+- **`plots.py`**: Módulo de visualización configurado con backend `Agg` (sin requerir monitor gráfico) que genera las gráficas de evaluación para MLflow: series temporales y dispersión real vs. predicho (P1), matrices de confusión y curvas Precision-Recall (P2), y mapas geográficos de estaciones coloreados por clúster o municipio (P3).
+- **`modeling/model_p1.py`, `model_p2.py`, `model_p3.py`**: Clases POO (`DemandaLinealP1`, `RiesgoLogisticoP2`, `ClusterEstacionesP3`) que encapsulan objetos `sklearn.pipeline.Pipeline` uniendo el escalamiento `StandardScaler` con el estimador final, ofreciendo métodos estandarizados `.fit()`, `.predict()`, `.save()` y `.load()`.
+- **`modeling/tracking.py`**: Gestiona la trazabilidad en MLflow registrando el hash SHA-256 de los datos, el hash del commit de Git, hiperparámetros, métricas desglosadas por partición (`Train`, `Validación`, `Test`), artefactos de figuras, tablas CSV y el modelo con su firma (`infer_signature`), guardando simultáneamente copias locales de las figuras en `reports/figures/`.
+
+---
+
+## 4. Instalación y Configuración del Entorno
+
+### Requisitos previos
+- **Python 3.10 o 3.11** instalado en el sistema operativo.
+- **Git** configurado en la terminal.
 
 ### Paso 1: Clonar el proyecto
 ```bash
-git clone [https://github.com/](https://github.com/)[ORGANIZACION_O_USUARIO]/TC5061-Proyecto-Equipo[NN].git
-
-#(Seria la liga de este repo de prueba)
-
-#abren la carpeta
-cd TC5061-Proyecto-Equipo[NN]
+git clone [https://github.com/](https://github.com/)[ORGANIZACION_O_USUARIO]/TC5061-Proyecto-Equipo20.git
+cd TC5061-Proyecto-Equipo20
 ```
 
 ### Paso 2: Crear el entorno virtual
 ```bash
-# Crear el entorno con el nombre estándar .venv
 python -m venv .venv
 ```
 
 ### Paso 3: Activar el entorno virtual
 
-* **En macOS y Linux:**
+- **macOS y Linux:**
   ```bash
   source .venv/bin/activate
   ```
 
-* **En Windows (PowerShell):**
+- **Windows (PowerShell):**
   ```powershell
   .venv\Scripts\Activate.ps1
   ```
-  *(Si PowerShell arroja error de políticas de script, ejecuta antes: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`)*
+  *(En caso de bloqueo por políticas de ejecución en PowerShell, ejecutar antes: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`)*
 
-* **En Windows (Símbolo del sistema / CMD):**
+- **Windows (Símbolo del sistema / CMD):**
   ```cmd
   .venv\Scripts\activate.bat
   ```
 
-*(Sabrás que está activo porque aparecerá `(.venv)` al inicio de la línea de comandos).*
-
-### Paso 4: Instalar dependencias desde `requirements.txt` y registrar el kernel
-Actualiza `pip`, instala las librerías fijadas del proyecto, monta el paquete local y vincula el kernel de Jupyter:
-
+### Paso 4: Instalar dependencias y montar el paquete local
 ```bash
-# 1. Actualizar el gestor de paquetes
+# 1. Actualizar pip
 pip install --upgrade pip
 
-# 2. Instalar dependencias oficiales fijadas en requirements.txt
+# 2. Instalar dependencias fijadas en requirements.txt
 pip install -r requirements.txt
 
-# 3. Instalar el paquete local en modo editable para importar proyecto_mibici
+# 3. Instalar el paquete local proyecto_mibici en modo editable
 pip install -e .
 
-# 4. Vincular este entorno exacto a Jupyter
+# 4. Registrar el kernel para uso en Jupyter Notebooks
 python -m ipykernel install --user --name=mibici-venv --display-name="Python (MiBici .venv)"
 ```
 
 ---
 
-## 2. Descargar y Generar el Dataset (Ingesta Reproducible)
+## 5. Descarga y Procesamiento de Datos (Ingesta Reproducible)
 
-Con el entorno virtual activo `(.venv)`, corre el módulo de ingesta una sola vez desde la terminal:
+Con el entorno virtual activo `(.venv)`, ejecuta el módulo de ingesta desde la raíz del proyecto:
 
 ```bash
 python -m proyecto_mibici.dataset
 ```
 
-**¿Qué hace este comando automáticamente?**
-1. Descarga todos los archivos CSV mensuales de MiBici y la nomenclatura oficial sin pasos manuales.
-2. Limpia formatos de texto, normaliza nombres de columnas y parsea fechas.
-3. Genera los archivos en formato Apache Parquet de alta velocidad en:
-   * `data/processed/trips.parquet`
-   * `data/processed/stations.parquet`
-4. Genera `data/manifest.json` con los hashes criptográficos SHA256 para certificar reproducibilidad idéntica.
+**Salidas generadas automáticamente:**
+1. Descarga de los archivos CSV originales en `data/raw/`.
+2. Generación de los conjuntos procesados en formato Apache Parquet:
+   * Maestro general: `data/processed/trips.parquet`
+   * Catálogo de estaciones: `data/processed/stations.parquet`
+   * Entrenamiento (2025): `data/processed/train/trips_train_2025.parquet`
+   * Prueba (Abr-Sep 2026): `data/processed/test/trips_test_2026_04_09.parquet`
+3. Creación de `data/manifest.json` con los hashes criptográficos SHA-256, conteo total de registros y rango de fechas.
 
 ---
 
-## 3. Iniciar Jupyter y Crear tu Notebook
+## 6. Entrenamiento y Registro en MLflow (`train_p*.py`)
 
-2. Crea tu archivo dentro de la carpeta `notebooks/` por ejemplo:
-   * Para P1: `notebooks/1.0-iniciales-demanda_p1.ipynb`
-   * Para P2: `notebooks/1.0-iniciales-desbalance_p2.ipynb`
-   * Para P3: `notebooks/1.0-iniciales-clustering_p3.ipynb`
-3. En la esquina superior derecha del notebook, asegúrate de que el Kernel seleccionado sea **`Python (MiBici .venv)`**.
+Cada script de entrenamiento construye su tabla de características desde los archivos Parquet procesados, aplica la partición temporal correspondiente para evitar fuga de información (*data leakage*), ajusta el Pipeline, guarda el artefacto `.pkl` en `models/` y registra la corrida completa en MLflow.
+
+### Requisitos de MLflow
+Antes de ejecutar los entrenamientos, inicia el servidor local de MLflow en una terminal secundaria con el entorno virtual activo:
+
+```bash
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+```
+
+*La URI de seguimiento está definida en `proyecto_mibici/config.py` mediante `URI_MLFLOW_TRACKING` (`http://localhost:5000` o `sqlite:///mlflow.db`). Puedes consultar los experimentos en el navegador ingresando a `http://localhost:5000`.*
 
 ---
 
-## 4. Primera Celda del Notebook (Carga Rápida)
+### P1: Entrenamiento de Demanda Horaria (Regresión)
+```bash
+python -m proyecto_mibici.modeling.train_p1
+```
 
-Coloca este bloque en la primera celda para garantizar que las rutas funcionen en cualquier computadora
+- **Parámetros registrados en MLflow:**
+  * `pregunta`: `"P1"`
+  * `modelo`: `"DemandaLinealP1"`
+  * `features`: Lista de rezagos (`lag_1h`, `lag_24h`, `lag_168h`), medias móviles (`rolling_3h`, `rolling_168h`) y variables de calendario (`target_hour_sin`, `target_hour_cos`, `target_is_weekend`).
+  * `train_inicio`, `train_fin`, `validation_inicio`, `validation_fin`, `test_inicio`, `test_fin`: Límites cronológicos exactos de cada partición.
+  * `datos_version`: Hash SHA-256 corto del dataset procesado.
+- **Métricas registradas:** `train_mae`, `train_rmse`, `test_mae`, `test_rmse`.
+- **Artefactos generados:**
+  * Local: `models/p1_linear_model.pkl`
+  * MLflow: Pipeline scikit-learn con firma de entrada/salida, `manifest.json`, gráfica de serie temporal (`penitenciaria_real_vs_pred_v2_lineal_rolling.png`) y gráfico de dispersión global (`scatter_test_v2_lineal_rolling.png`).
 
-Es importante para que se integre con la estructura de carpeta de cookiecutter
-:
+---
 
-```python
-import sys
-from pathlib import Path
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+### P2: Entrenamiento de Riesgo de Desbalance (Clasificación)
+```bash
+python -m proyecto_mibici.modeling.train_p2
+```
 
-# Resolver la raíz del repositorio sin rutas absolutas
-ROOT_DIR = Path.cwd().resolve().parents[0] if Path.cwd().name == "notebooks" else Path.cwd()
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+- **Parámetros registrados en MLflow:**
+  * `pregunta`: `"P2"`
+  * `modelo`: `"RiesgoLogisticoP2"`
+  * `umbral`: `0.5` (umbral de saturación/vaciamiento respecto a la capacidad de la estación).
+  * `variables`: Variables predictoras (`hora_del_dia`, `fin_de_semana`, `acumulado_relativo`, `balance_ult_3h_relativo`).
+  * `train_inicio`, `train_fin`, `validation_inicio`, `validation_fin`, `test_inicio`, `test_fin` y `datos_version`.
+- **Métricas registradas:** `train_precision`, `train_recall`, `train_f1_score`, `train_pr_auc`, `test_precision`, `test_recall`, `test_f1_score`, `test_pr_auc`.
+- **Artefactos generados:**
+  * Local: `models/p2_logistic_model.pkl`
+  * MLflow: Pipeline scikit-learn con firma de datos, `manifest.json`, matriz de confusión (`matriz_confusion_v1_logistic.png`) y curva Precision-Recall (`curva_pr_v1_logistic.png`).
 
-from proyecto_mibici.config import TRIPS_PROCESSED_PATH, STATIONS_PROCESSED_PATH
+---
 
-# Carga de datos columnar (toma entre 2 y 4 segundos)
-df_trips = pd.read_parquet(TRIPS_PROCESSED_PATH)
-df_stations = pd.read_parquet(STATIONS_PROCESSED_PATH)
+### P3: Entrenamiento de Clustering de Estaciones (No Supervisado)
+```bash
+python -m proyecto_mibici.modeling.train_p3
+```
 
-print(f"Viajes cargados: {len(df_trips):,}")
-print(f"Estaciones registradas: {len(df_stations):,}")
+- **Parámetros registrados en MLflow:**
+  * `pregunta`: `"P3"`
+  * `modelo`: Registra dos corridas para contraste directo: `"AgrupacionMunicipio"` (Línea Base geográfica) y `"ClusterEstacionesP3"` (KMeans funcional).
+  * `n_clusters`: `4` ($K$ elegido).
+  * `n_init`: `10`.
+  * `semilla`: `RANDOM_SEED`.
+  * `variables`: Proporciones por bloque horario (`pct_madrugada`, `pct_manana`, `pct_mediodia`, `pct_tarde`, `pct_noche`), `pct_fin_de_semana`, `duracion_media`, `viajes_dia_log` y `balance_neto`.
+  * `min_viajes_estacion`: `100`.
+  * `duracion_max_min`: `180`.
+- **Métricas registradas:** `train_silhouette`, `train_davies_bouldin`, `test_silhouette`, `test_davies_bouldin` en ambas corridas.
+- **Artefactos generados:**
+  * Local: `models/p3_kmeans_model.pkl` y tabla comparativa `reports/p3_comparacion.csv`.
+  * MLflow: Pipeline scikit-learn con firma de datos, mapa de estaciones por clúster KMeans (`mapa_grupos_kmeans.png`) y mapa de la línea base municipal (`mapa_grupos_baseline.png`).
+
+---
+
+## 7. Inferencia por Línea de Comandos (`predict_p*.py`)
+
+Los scripts de inferencia cargan los Pipelines serializados desde `models/` (aplicando internamente el `StandardScaler` ajustado en entrenamiento) y generan predicciones sobre nuevos datos mediante una interfaz CLI construida con **Typer**.
+
+### Parámetros de los Scripts de Inferencia
+
+| Opción CLI | Tipo | Obligatorio | Aplica a | Descripción |
+|---|---|---|---|---|
+| `--input`, `-i` | `PATH` | **Sí** | P1, P2, P3 | Ruta al archivo `.parquet` o `.csv` con las variables de entrada del modelo. |
+| `--output`, `-o` | `PATH` | No | P1, P2, P3 | Ruta de salida (`.parquet` o `.csv`) para guardar el DataFrame con las predicciones anexadas. Si se omite, imprime una vista previa de 10 filas en consola. |
+| `--umbral`, `-u` | `FLOAT` | No | Solo P2 | Umbral de decisión entre `0.0` y `1.0` para clasificar una estación en riesgo a partir de la probabilidad predicha (valor por defecto: `0.5`). |
+
+---
+
+### Ejemplos de Ejecución de Inferencia
+
+#### 1. Inferencia de Demanda Horaria (P1)
+Anexa la columna `demanda_predicha` garantizando predicciones no negativas sobre el archivo procesado de viajes:
+
+```bash
+# Guardar resultados en archivo Parquet
+python -m proyecto_mibici.modeling.predict_p1 \
+  --input data/processed/trips.parquet \
+  --output reports/predicciones_p1.parquet
+
+# Mostrar vista previa en terminal sin guardar archivo
+python -m proyecto_mibici.modeling.predict_p1 \
+  --input data/processed/trips.parquet
+```
+
+#### 2. Inferencia de Riesgo de Desbalance (P2)
+Anexa las columnas `prob_riesgo` (probabilidad continua) y `pred_riesgo` (etiqueta booleana evaluada contra `--umbral`):
+
+```bash
+# Inferencia con umbral por defecto (0.50) exportando a CSV
+python -m proyecto_mibici.modeling.predict_p2 \
+  --input data/processed/trips.parquet \
+  --umbral 0.5 \
+  --output reports/predicciones_p2.csv
+
+# Inferencia ajustando el umbral a 0.35 para priorizar sensibilidad (Recall)
+python -m proyecto_mibici.modeling.predict_p2 \
+  --input data/processed/trips.parquet \
+  --umbral 0.35 \
+  --output reports/predicciones_p2_alta_sensibilidad.parquet
+```
+
+#### 3. Inferencia de Clusters Funcionales (P3)
+Escala las características y asigna la etiqueta de clúster a partir del catálogo procesado de estaciones:
+
+```bash
+# Asignar clúster funcional a estaciones
+python -m proyecto_mibici.modeling.predict_p3 \
+  --input data/processed/stations.parquet \
+  --output reports/estaciones_clusterizadas.csv
 ```
 
 ---
 
-## 5. Recetas de Código: Construcción de la Variable $y$ y Features por Pregunta
+## 8. Orquestador End-to-End e Integración de Pruebas (`pipeline.py`)
+
+El proyecto incluye un script orquestador maestro que automatiza todo el ciclo de vida del sistema en una sola ejecución. Se encarga de coordinar la ingesta ETL, los tres entrenamientos con registro en MLflow, las pruebas de inferencia CLI y la validación con `pytest`.
+
+Este script se creo para ejecutar la descarga, los entrenamientos, los tests y la generación de reportes y figuras, además de enviar a mlflow las configuraciones e hiperparametros de los 3 modelos.
+
+Se genero de manera única de probar los modelos y que todo el proyecto funcione con metadatos fijos desde el script
+
+### Parámetros del Orquestador Maestro
+
+| Bandera CLI | Tipo | Por defecto | Descripción |
+|---|---|---|---|
+| `--skip-data` | Booleano | `False` | Omite la descarga y el procesamiento inicial de datos si los archivos Parquet ya existen en `data/processed/`. |
+| `--skip-tests` | Booleano | `False` | Omite la ejecución automática de las pruebas de inferencia y la suite de `pytest`. |
+
+### Comandos de Ejecución Integral
+
+* **Ejecutar todo el flujo desde cero (Ingesta + Entrenamiento + Inferencia de prueba + Pytest):**
+  ```bash
+  python -m proyecto_mibici.pipeline
+  ```
 
 
-Los archivos `trips.parquet` y `stations.parquet` **son inmutables**. Cada integrante ejecuta en su notebook el bloque correspondiente a su problema:
+* **Ejecutar únicamente ingesta y entrenamiento (forzando regenerar los archivos parquet):**
+  ```bash
+  python -m proyecto_mibici.pipeline --force-data
+  ```
 
----
+* **Ejecutar únicamente entrenamiento, inferencia y tests (omitiendo la descarga de datos):**
+  ```bash
+  python -m proyecto_mibici.pipeline --skip-data
+  ```
 
-Esa es una sugerencia para calcular sus variables y pues la pregunta 1 y 2 no tienen directamente la variable y hay q calcularla.
-
-Esto les serira de ayuda para crear las variables faltantes y puedan terminar sus modelos por que estaba revisando y no estan tan directos.
-
-Esta documentado en el docx
-
-### Pregunta 1 (P1): Demanda de Viajes por Estación (Regresión)
-
-* **¿Qué predecimos ($y$)?** Número de salidas que tendrá una estación en la siguiente hora ($t+1$).
-* **Granularidad:** `(hour_window, origen_id)`.
-
-```python
-# 1. Truncar inicio del viaje a intervalos de 1 hora
-df_trips["hour_window"] = df_trips["inicio_del_viaje"].dt.floor("h")
-
-# 2. Variable objetivo (y): Conteo de salidas
-df_p1 = (
-    df_trips.groupby(["hour_window", "origen_id"])
-    .size()
-    .reset_index(name="demand_count")  # <--- VARIABLE OBJETIVO Y
-)
-
-# 3. Features temporales (Rezagos para evitar Data Leakage)
-df_p1 = df_p1.sort_values(["origen_id", "hour_window"]).reset_index(drop=True)
-df_p1["lag_1h"] = df_p1.groupby("origen_id")["demand_count"].shift(1)
-df_p1["lag_24h"] = df_p1.groupby("origen_id")["demand_count"].shift(24)
-df_p1["lag_168h"] = df_p1.groupby("origen_id")["demand_count"].shift(168)  # Misma hora semana anterior
-
-# Variables de calendario
-df_p1["hour"] = df_p1["hour_window"].dt.hour
-df_p1["dayofweek"] = df_p1["hour_window"].dt.dayofweek
-df_p1["is_weekend"] = df_p1["dayofweek"].isin([5, 6]).astype(int)
-
-# Transformación cíclica
-df_p1["hour_sin"] = np.sin(2 * np.pi * df_p1["hour"] / 24.0)
-df_p1["hour_cos"] = np.cos(2 * np.pi * df_p1["hour"] / 24.0)
-
-# Limpiar nulos originados por los rezagos
-df_p1 = df_p1.dropna().reset_index(drop=True)
-```
-
----
-
-### Pregunta 2 (P2): Riesgo de Desbalance Crítico (Clasificación Binaria)
-
-* **¿Qué predecimos ($y$)?** $1$ si la estación entra en riesgo de quedarse vacía o saturarse en la siguiente hora; $0$ si opera en equilibrio normal.
-* **Aproximación de riesgo (Rúbrica oficial):**
-  $$\Delta = \text{Entradas} - \text{Salidas}$$
-  $$y = 1 \quad \text{si} \quad \frac{\vert{}\Delta\vert{}}{\text{dpcapacity}} \ge 0.50, \quad \text{de lo contrario } 0$$
-
-```python
-# 1. Truncar marcas horarias
-df_trips["hour_start"] = df_trips["inicio_del_viaje"].dt.floor("h")
-df_trips["hour_end"] = df_trips["fin_del_viaje"].dt.floor("h")
-
-# 2. Conteo de salidas por estación
-salidas = (
-    df_trips.groupby(["hour_start", "origen_id"])
-    .size()
-    .reset_index(name="departures")
-    .rename(columns={"hour_start": "timestamp", "origen_id": "station_id"})
-)
-
-# 3. Conteo de entradas por estación
-entradas = (
-    df_trips.groupby(["hour_end", "destino_id"])
-    .size()
-    .reset_index(name="arrivals")
-    .rename(columns={"hour_end": "timestamp", "destino_id": "station_id"})
-)
-
-# 4. Consolidar flujo horario
-df_flow = pd.merge(salidas, entradas, on=["timestamp", "station_id"], how="outer").fillna(0)
-df_flow["net_flow"] = df_flow["arrivals"] - df_flow["departures"]
-
-# 5. Cruzar con capacidad física instalada
-df_flow = df_flow.merge(df_stations[["id", "dpcapacity"]], left_on="station_id", right_on="id", how="inner")
-
-# 6. Construcción de la etiqueta objetivo (y)
-df_flow["stress_ratio"] = df_flow["net_flow"].abs() / df_flow["dpcapacity"]
-df_flow["is_stressed"] = (df_flow["stress_ratio"] >= 0.50).astype(int)  # <--- VARIABLE OBJETIVO Y (0 o 1)
-
-# 7. Features y rezagos
-df_flow = df_flow.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
-df_flow["net_flow_lag_1h"] = df_flow.groupby("station_id")["net_flow"].shift(1)
-df_flow["net_flow_lag_24h"] = df_flow.groupby("station_id")["net_flow"].shift(24)
-
-df_p2 = df_flow.dropna().reset_index(drop=True)
-```
-
----
-
-### Pregunta 3 (P3): Perfiles de Estaciones (Clustering No Supervisado)
-
-* **¿Qué agrupamos?** Las estaciones físicas del sistema según patrones de uso anual y geolocalización.
-* **Unidad de análisis:** 1 fila por estación (no viajes ni horas).
-
-```python
-# 1. Marcas temporales de cada viaje
-hour = df_trips["inicio_del_viaje"].dt.hour
-is_morning = hour.between(7, 10)
-is_evening = hour.between(17, 20)
-is_weekend = df_trips["inicio_del_viaje"].dt.dayofweek.isin([5, 6])
-duration_min = (df_trips["fin_del_viaje"] - df_trips["inicio_del_viaje"]).dt.total_seconds() / 60.0
-
-df_trips["is_morning"] = is_morning
-df_trips["is_evening"] = is_evening
-df_trips["is_weekend"] = is_weekend
-df_trips["duration_min"] = duration_min
-
-# 2. Resumen anual por estación
-profiles = df_trips.groupby("origen_id").agg(
-    total_trips=("viaje_id", "count"),
-    morning_trips=("is_morning", "sum"),
-    evening_trips=("is_evening", "sum"),
-    weekend_trips=("is_weekend", "sum"),
-    avg_duration_min=("duration_min", "mean")
-).reset_index()
-
-# 3. Métricas de perfil relativo
-profiles["morning_evening_ratio"] = (profiles["morning_trips"] + 1) / (profiles["evening_trips"] + 1)
-profiles["weekend_ratio"] = profiles["weekend_trips"] / (profiles["total_departures"] if "total_departures" in profiles else profiles["total_trips"] + 1)
-
-# 4. Tabla final consolidada
-df_p3 = df_stations.merge(profiles, left_on="id", right_on="origen_id", how="inner")
-df_p3["daily_turnover"] = (df_p3["total_trips"] / 365.0) / df_p3["dpcapacity"]
-
-# Columnas listas para StandardScaler y KMeans:
-features_p3 = df_p3[["latitude", "longitude", "morning_evening_ratio", "weekend_ratio", "daily_turnover", "avg_duration_min"]]
-```
-
----
-
-## 6. Partición Temporal Estricta (Sin Data Leakage)
-
-Para evaluar **P1** y **P2**, utiliza esta función en tu notebook antes de entrenar cualquier modelo:
-
-```python
-def split_temporal(df: pd.DataFrame, time_col: str):
-    """Partición cronológica obligatoria por rúbrica para evitar fuga de información."""
-    train_limit = pd.Timestamp("2025-12-31 23:59:59")
-    val_limit = pd.Timestamp("2026-02-28 23:59:59")
-    
-    train = df[df[time_col] <= train_limit].copy()
-    val = df[(df[time_col] > train_limit) & (df[time_col] <= val_limit)].copy()
-    test = df[df[time_col] > val_limit].copy()
-    
-    return train, val, test
-
-# Ejemplo de uso:
-# train_df, val_df, test_df = split_temporal(df_p1, time_col="hour_window")
-# print(f"Train: {len(train_df):,} | Val: {len(val_df):,} | Test: {len(test_df):,}")
-```
+* **Ejecutar únicamente ingesta y entrenamiento (omitiendo las pruebas finales):**
+  ```bash
+  python -m proyecto_mibici.pipeline --skip-tests
+  ```

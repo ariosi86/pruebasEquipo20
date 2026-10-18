@@ -26,13 +26,16 @@ MANIFEST_PATH = DATA_DIR / "manifest.json"
 STATIONS_PROCESSED_PATH = PROCESSED_DATA_DIR / "stations.parquet"
 TRIPS_PROCESSED_PATH = PROCESSED_DATA_DIR / "trips.parquet"
 
+TRIPS_TRAIN_PATH = PROCESSED_DATA_DIR / "train" / "trips_train_2025.parquet"
+TRIPS_TEST_PATH = PROCESSED_DATA_DIR / "test" / "trips_test_2026_04_09.parquet"
+
 # ==========================================
 # 2. PARÁMETROS GLOBALES Y TRACKING
 # ==========================================
 RANDOM_SEED = 42
 MLFLOW_EXPERIMENT_NAME = "mibici-equipo20"
 
-URI_MLFLOW_TRACKING = "http://localhost:8080"
+URI_MLFLOW_TRACKING = "http://127.0.0.1:5000"
 
 # ==========================================
 # 3. FUENTES Y ENLACES DE DESCARGA DIRECTA
@@ -111,3 +114,57 @@ P1_FEATURES_V1 = [
     "target_hour_sin", "target_hour_cos", "target_is_weekend",
 ]
 P1_FEATURES_V2 = P1_FEATURES_V1 + ["rolling_3h", "rolling_168h"]
+
+
+
+# ==========================================
+# CONFIGURACIÓN P2: CLASIFICACIÓN DE RIESGO
+# ==========================================
+P2_FIN_PERIODO = "2026-06-30 23:00"
+P2_INICIO_VALIDACION = "2026-01-01"
+P2_INICIO_PRUEBA = "2026-04-01"
+P2_MES_ESTACION_NUEVA = "2026_04"
+P2_HORA_INICIO_DIA = 3
+P2_UMBRAL = 0.5
+
+P2_VARIABLES = [
+    "hora_del_dia", 
+    "dia_semana", 
+    "fin_de_semana", 
+    "capacidad",
+    "salidas", 
+    "llegadas", 
+    "balance_acumulado_dia", 
+    "acumulado_relativo",
+    "balance_ult_3h_relativo", 
+    "riesgo_vacia", 
+    "riesgo_llena", 
+    "en_riesgo",
+]
+P2_OBJETIVO = "en_riesgo_siguiente"
+
+P2_MODEL_TYPE = "LogisticRegression" # o "RandomForestClassifier", etc.
+P2_RANDOM_STATE = 42
+
+
+# ==========================================
+# CONFIGURACIÓN P3: CLUSTERING DE ESTACIONES
+# ==========================================
+P3_TRAIN_INICIO = "2025-01-01"
+P3_TRAIN_FIN = "2026-01-01"
+P3_TEST_INICIO = "2026-05-01"
+P3_TEST_FIN = "2026-10-01"
+
+P3_VARIABLES = [
+    "pct_manana",
+    "pct_mediodia",
+    "pct_tarde",
+    "pct_noche",
+    "pct_fin_de_semana",
+    "duracion_media",
+    "viajes_dia_log",
+    "balance_neto",
+]
+P3_K_ELEGIDO = 4
+P3_MIN_VIAJES_ESTACION = 100
+P3_DURACION_MAX_MIN = 180
