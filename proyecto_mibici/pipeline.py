@@ -52,6 +52,11 @@ def ejecutar_pruebas_inferencia():
     """Genera muestras de validación y ejecuta los 3 scripts de inferencia (predict_p1, p2, p3)."""
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
+    sample_p1_out = REPORTS_DIR / "predicciones_p1_test.parquet"
+    sample_p2_out = REPORTS_DIR / "predicciones_p2_test.parquet"
+    sample_p3_out = REPORTS_DIR / "predicciones_p3_test.csv"
+
+    # --- FASE 1: GENERACIÓN DE INFERENCIA EN CARPETA TEMPORAL ---
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
@@ -59,46 +64,18 @@ def ejecutar_pruebas_inferencia():
         logger.info("Probando inferencia de P1 (predict_p1.py)...")
         df_p1, _ = construir_dataset_p1()
         sample_p1_in = tmp_path / "sample_p1_input.parquet"
-        sample_p1_out = REPORTS_DIR / "predicciones_p1_test.parquet"
         df_p1.tail(200).to_parquet(sample_p1_in, index=False)
         run_predict_p1(input_path=sample_p1_in, output_path=sample_p1_out)
 
-        # 2. Prueba de Inferencia P2 (Muestra aleatoria estratificada temporal para capturar horas de riesgo)
+        # 2. Prueba de Inferencia P2 (Muestra aleatoria representativa para capturar riesgo)
         logger.info("Probando inferencia de P2 (predict_p2.py)...")
-        try:
-            logger.info("Construyendo matriz de características para P2...")
-            df_p2 = construir_dataset_p2()
-
-            sample_p2_in = tmp_path / "sample_p2_input.parquet"
-            sample_p2_out = REPORTS_DIR / "predicciones_p2_test.parquet"
-
-            # Muestra aleatoria de 200 filas con semilla fija
-            n_muestras = min(200, len(df_p2))
-            df_p2_sample = df_p2.sample(n=n_muestras, random_state=42)
-            df_p2_sample.to_parquet(sample_p2_in, index=False)
-            logger.info(
-                f"Muestra de entrada creada ({len(df_p2_sample)} filas). Ejecutando inferencia..."
-            )
-
-            # Ejecuta la inferencia
-            run_predict_p2(
-                input_path=sample_p2_in, output_path=sample_p2_out, umbral=0.5
-            )
-
-            if sample_p2_out.exists():
-                df_res_p2 = pd.read_parquet(sample_p2_out)
-                n_riesgo = int(df_res_p2["pred_riesgo"].sum())
-                n_total = len(df_res_p2)
-                pct = (n_riesgo / n_total) * 100 if n_total > 0 else 0.0
-                logger.success(
-                    f"[P2 Validado] Casos en riesgo: {n_riesgo}/{n_total} ({pct:.2f}%) guardados en {sample_p2_out.name}"
-                )
-        except Exception as e:
-            logger.exception(f"Fallo durante la inferencia de P2: {e}")
-            raise
+        logger.info("Construyendo matriz de características para P2...")
+        df_p2 = construir_dataset_p2()
         sample_p2_in = tmp_path / "sample_p2_input.parquet"
-        sample_p2_out = REPORTS_DIR / "predicciones_p2_test.parquet"
-        df_p2.sample(n=min(500, len(df_p2)), random_state=42).to_parquet(sample_p2_in, index=False)
+        df_p2.sample(n=min(200, len(df_p2)), random_state=42).to_parquet(
+            sample_p2_in, index=False
+        )
+        logger.info("Muestra de entrada P2 creada (200 filas). Ejecutando inferencia...")
         run_predict_p2(input_path=sample_p2_in, output_path=sample_p2_out, umbral=0.5)
 
         # 3. Prueba de Inferencia P3
@@ -113,9 +90,53 @@ def ejecutar_pruebas_inferencia():
         ]
         perfil_test = construir_perfil_estaciones(df_test_p3, min_viajes=P3_MIN_VIAJES_ESTACION)
         sample_p3_in = tmp_path / "sample_p3_input.parquet"
-        sample_p3_out = REPORTS_DIR / "predicciones_p3_test.csv"
         perfil_test.reset_index().to_parquet(sample_p3_in, index=False)
         run_predict_p3(input_path=sample_p3_in, output_path=sample_p3_out)
+
+    # --- FASE 2: RESUMEN EJECUTIVO CONSOLIDADO EN CONSOLA (P1, P2, P3) ---
+    logger.info("\n" + "=" * 60)
+    logger.info("TABLERO EJECUTIVO DE INFERENCIA EN PRODUCCIÓN")
+    logger.info("=" * 60)
+
+    # 1. Resumen P1 (Demanda)
+    if sample_p1_out.exists():
+        df_res_p1 = pd.read_parquet(sample_p1_out)
+        demanda_media = df_res_p1["demanda_predicha"].mean()
+        demanda_max = df_res_p1["demanda_predicha"].max()
+        logger.info(
+            f"• P1 [Demanda Horaria]: {len(df_res_p1)} registros | "
+            f"Media: {demanda_media:.2f} viajes/h | Pico máx: {demanda_max:.2f} viajes/h"
+        )
+        cols_p1 = [c for c in ["estacion_id", "hora", "demanda_predicha"] if c in df_res_p1.columns]
+        if cols_p1:
+            logger.info("  Muestra P1:\n" + df_res_p1[cols_p1].head(3).to_string(index=False))
+
+    # 2. Resumen P2 (Riesgo de Desbalance)
+    if sample_p2_out.exists():
+        df_res_p2 = pd.read_parquet(sample_p2_out)
+        n_riesgo = int(df_res_p2["pred_riesgo"].sum())
+        n_total = len(df_res_p2)
+        pct = (n_riesgo / n_total) * 100 if n_total > 0 else 0.0
+        logger.info(
+            f"• P2 [Riesgo Desbalance]: {n_riesgo}/{n_total} estaciones en riesgo ({pct:.1f}%) con umbral 0.5"
+        )
+        cols_p2 = [c for c in ["estacion_id", "hora", "prob_riesgo", "pred_riesgo"] if c in df_res_p2.columns]
+        if cols_p2:
+            logger.info("  Muestra P2:\n" + df_res_p2[cols_p2].head(3).to_string(index=False))
+
+    # 3. Resumen P3 (Segmentación K-Means)
+    if sample_p3_out.exists():
+        df_res_p3 = pd.read_csv(sample_p3_out)
+        dist_grupos = df_res_p3["grupo"].value_counts().to_dict()
+        logger.info(
+            f"• P3 [Clustering K-Means]: {len(df_res_p3)} estaciones asignadas | Distribución: {dist_grupos}"
+        )
+        cols_p3 = [c for c in ["origen_id", "grupo", "viajes_dia_log"] if c in df_res_p3.columns]
+        if not cols_p3:
+            cols_p3 = df_res_p3.columns[:3]
+        logger.info("  Muestra P3:\n" + df_res_p3[cols_p3].head(3).to_string(index=False))
+
+    logger.info("=" * 60 + "\n")
 
 
 def ejecutar_suite_pytest():

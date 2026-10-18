@@ -246,43 +246,47 @@ Los scripts de inferencia cargan los Pipelines serializados desde `models/` (apl
 ### Ejemplos de Ejecución de Inferencia
 
 #### 1. Inferencia de Demanda Horaria (P1)
-Anexa la columna `demanda_predicha` garantizando predicciones no negativas sobre el archivo procesado de viajes:
+Anexa la columna `demanda_predicha` sobre un archivo con la matriz de características horarias (rezagos y componentes temporales):
 
 ```bash
 # Guardar resultados en archivo Parquet
 python -m proyecto_mibici.modeling.predict_p1 \
-  --input data/processed/trips.parquet \
-  --output reports/predicciones_p1.parquet
+  --input reports/predicciones_p1_test.parquet
 
 # Mostrar vista previa en terminal sin guardar archivo
 python -m proyecto_mibici.modeling.predict_p1 \
-  --input data/processed/trips.parquet
-```
+  --input reports/predicciones_p1_test.parquet \
+  --output reports/mis_predicciones_p1.parquet
+
+
 
 #### 2. Inferencia de Riesgo de Desbalance (P2)
 Anexa las columnas `prob_riesgo` (probabilidad continua) y `pred_riesgo` (etiqueta booleana evaluada contra `--umbral`):
 
 ```bash
-# Inferencia con umbral por defecto (0.50) exportando a CSV
+# Inferencia con umbral estándar (0.50) y vista previa en terminal
 python -m proyecto_mibici.modeling.predict_p2 \
-  --input data/processed/trips.parquet \
-  --umbral 0.5 \
-  --output reports/predicciones_p2.csv
+  --input reports/predicciones_p2_test.parquet \
+  --umbral 0.5
 
-# Inferencia ajustando el umbral a 0.35 para priorizar sensibilidad (Recall)
+# Inferencia con umbral sensible (0.35) exportando a CSV
 python -m proyecto_mibici.modeling.predict_p2 \
-  --input data/processed/trips.parquet \
+  --input reports/predicciones_p2_test.parquet \
   --umbral 0.35 \
-  --output reports/predicciones_p2_alta_sensibilidad.parquet
+  --output reports/predicciones_p2_sensible.csv
 ```
 
 #### 3. Inferencia de Clusters Funcionales (P3)
 Escala las características y asigna la etiqueta de clúster a partir del catálogo procesado de estaciones:
 
 ```bash
-# Asignar clúster funcional a estaciones
+# Asignar grupos funcionales y mostrar distribución en terminal
 python -m proyecto_mibici.modeling.predict_p3 \
-  --input data/processed/stations.parquet \
+  --input reports/predicciones_p3_test.csv
+
+# Exportar asignación final de grupos a una ruta personalizada
+python -m proyecto_mibici.modeling.predict_p3 \
+  --input reports/predicciones_p3_test.csv \
   --output reports/estaciones_clusterizadas.csv
 ```
 

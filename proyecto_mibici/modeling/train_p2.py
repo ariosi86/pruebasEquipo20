@@ -5,9 +5,11 @@ Script de entrenamiento, evaluación y registro en MLflow para P2 (Riesgo de Des
 Ejecución: python -m proyecto_mibici.modeling.train_p2
 """
 
+import numpy as np
 import pandas as pd
 import typer
 from loguru import logger
+from sklearn.dummy import DummyClassifier
 from sklearn.metrics import auc, classification_report, precision_recall_curve
 
 from proyecto_mibici.config import (
@@ -16,6 +18,7 @@ from proyecto_mibici.config import (
     P2_OBJETIVO,
     P2_UMBRAL,
     P2_VARIABLES,
+    REPORTS_DIR,
     URI_MLFLOW_TRACKING,
 )
 from proyecto_mibici.features import construir_dataset_p2
@@ -68,7 +71,7 @@ def main():
     modelo.save(MODELS_DIR / "p2_logistic_model.pkl")
     logger.info("Pipeline P2 guardado exitosamente en models/p2_logistic_model.pkl")
 
-    # 3. Inferencia y evaluación en Train y Test
+    # 3. Inferencia y evaluación en Train y Test (Modelo Logístico)
     y_train_real = df_train[P2_OBJETIVO]
     y_train_pred = modelo.predict(df_train)
     y_train_prob = modelo.predict_proba(df_train)
@@ -79,11 +82,44 @@ def main():
     y_test_prob = modelo.predict_proba(df_test)
     metricas_test = extraer_metricas_clasificacion(y_test_real, y_test_pred, y_test_prob, "Test")
 
+    # 4. Evaluación de Línea Base Heurística (Dummy Estratificada según tasa base de desbalance)
+    logger.info("Evaluando Línea Base Heurística (Dummy Estratificada)...")
+    dummy = DummyClassifier(strategy="stratified", random_state=42)
+    dummy.fit(df_train[P2_VARIABLES], y_train_real)
+
+    dummy_train_pred = dummy.predict(df_train[P2_VARIABLES])
+    dummy_train_prob = dummy.predict_proba(df_train[P2_VARIABLES])[:, 1]
+    metricas_dummy_train = extraer_metricas_clasificacion(y_train_real, dummy_train_pred, dummy_train_prob, "Train")
+
+    dummy_test_pred = dummy.predict(df_test[P2_VARIABLES])
+    dummy_test_prob = dummy.predict_proba(df_test[P2_VARIABLES])[:, 1]
+    metricas_dummy_test = extraer_metricas_clasificacion(y_test_real, dummy_test_pred, dummy_test_prob, "Test")
+
+    # 5. Generar y guardar reporte comparativo P2 vs Línea Base (igual que P3)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    df_p2_comp = pd.DataFrame(
+        {
+            ("baseline_estratificada", "precision"): [metricas_dummy_train["precision"], metricas_dummy_test["precision"]],
+            ("baseline_estratificada", "recall"): [metricas_dummy_train["recall"], metricas_dummy_test["recall"]],
+            ("baseline_estratificada", "f1"): [metricas_dummy_train["f1_score"], metricas_dummy_test["f1_score"]],
+            ("logistic_balanced", "precision"): [metricas_train["precision"], metricas_test["precision"]],
+            ("logistic_balanced", "recall"): [metricas_train["recall"], metricas_test["recall"]],
+            ("logistic_balanced", "f1"): [metricas_train["f1_score"], metricas_test["f1_score"]],
+        },
+        index=["Train", "Test"],
+    )
+    df_p2_comp.columns = pd.MultiIndex.from_tuples(df_p2_comp.columns)
+    p2_comp_path = REPORTS_DIR / "p2_comparacion.csv"
+    df_p2_comp.to_csv(p2_comp_path)
+
+    logger.info(f"Reporte comparativo guardado en {p2_comp_path}:")
+    logger.info("\n" + df_p2_comp.round(3).to_string())
+
+    # 6. Registro formal en MLflow Tracking usando la clase MLFlowTracker
     tabla = pd.DataFrame([metricas_train, metricas_test])
     tabla_est_vacia = pd.DataFrame(columns=["origen_id", "nombre_estacion", "MAE"])
     figuras = figuras_p2(y_test_real, y_test_pred, y_test_prob, "v1_logistic")
 
-    # 4. Registro formal en MLflow Tracking usando la clase MLFlowTracker
     params_base, tags_base = tracker.armar_params_tags(
         "P2",
         splits,
