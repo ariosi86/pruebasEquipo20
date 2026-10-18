@@ -63,12 +63,42 @@ def ejecutar_pruebas_inferencia():
         df_p1.tail(200).to_parquet(sample_p1_in, index=False)
         run_predict_p1(input_path=sample_p1_in, output_path=sample_p1_out)
 
-        # 2. Prueba de Inferencia P2
+        # 2. Prueba de Inferencia P2 (Muestra aleatoria estratificada temporal para capturar horas de riesgo)
         logger.info("Probando inferencia de P2 (predict_p2.py)...")
-        df_p2 = construir_dataset_p2()
+        try:
+            logger.info("Construyendo matriz de características para P2...")
+            df_p2 = construir_dataset_p2()
+
+            sample_p2_in = tmp_path / "sample_p2_input.parquet"
+            sample_p2_out = REPORTS_DIR / "predicciones_p2_test.parquet"
+
+            # Muestra aleatoria de 200 filas con semilla fija
+            n_muestras = min(200, len(df_p2))
+            df_p2_sample = df_p2.sample(n=n_muestras, random_state=42)
+            df_p2_sample.to_parquet(sample_p2_in, index=False)
+            logger.info(
+                f"Muestra de entrada creada ({len(df_p2_sample)} filas). Ejecutando inferencia..."
+            )
+
+            # Ejecuta la inferencia
+            run_predict_p2(
+                input_path=sample_p2_in, output_path=sample_p2_out, umbral=0.5
+            )
+
+            if sample_p2_out.exists():
+                df_res_p2 = pd.read_parquet(sample_p2_out)
+                n_riesgo = int(df_res_p2["pred_riesgo"].sum())
+                n_total = len(df_res_p2)
+                pct = (n_riesgo / n_total) * 100 if n_total > 0 else 0.0
+                logger.success(
+                    f"[P2 Validado] Casos en riesgo: {n_riesgo}/{n_total} ({pct:.2f}%) guardados en {sample_p2_out.name}"
+                )
+        except Exception as e:
+            logger.exception(f"Fallo durante la inferencia de P2: {e}")
+            raise
         sample_p2_in = tmp_path / "sample_p2_input.parquet"
         sample_p2_out = REPORTS_DIR / "predicciones_p2_test.parquet"
-        df_p2.tail(200).to_parquet(sample_p2_in, index=False)
+        df_p2.sample(n=min(500, len(df_p2)), random_state=42).to_parquet(sample_p2_in, index=False)
         run_predict_p2(input_path=sample_p2_in, output_path=sample_p2_out, umbral=0.5)
 
         # 3. Prueba de Inferencia P3
@@ -89,10 +119,10 @@ def ejecutar_pruebas_inferencia():
 
 
 def ejecutar_suite_pytest():
-    """Ejecuta pytest sobre la carpeta tests/ si existe; si no, corre validaciones internas."""
-    tests_dir = PROJ_ROOT / "tests"
+    """Ejecuta pytest directamente sobre el directorio interno proyecto_mibici/tests/."""
+    tests_dir = PROJ_ROOT / "proyecto_mibici" / "tests"
     if tests_dir.exists():
-        logger.info("Ejecutando suite de pruebas con pytest...")
+        logger.info(f"Ejecutando suite de pruebas con pytest en {tests_dir}...")
         resultado = subprocess.run(
             [sys.executable, "-m", "pytest", str(tests_dir), "-v"],
             cwd=PROJ_ROOT,
@@ -100,7 +130,7 @@ def ejecutar_suite_pytest():
         if resultado.returncode != 0:
             raise RuntimeError("La suite de pruebas de pytest reportó fallos.")
     else:
-        logger.warning("No se encontró el directorio 'tests/'. Omitiendo pytest externo.")
+        logger.warning(f"No se encontró el directorio '{tests_dir}'. Omitiendo pytest.")
 
 
 @app.command()
@@ -130,7 +160,7 @@ def main(
 
     # ETAPA 1: DATOS (Lógica robusta con opción force)
     archivos_existen = TRIPS_PROCESSED_PATH.exists() and STATIONS_PROCESSED_PATH.exists()
-    
+
     if force_data:
         logger.info("[Etapa 1/6] Parámetro --force-data activado. Forzando re-descarga y procesamiento de datos...")
         run_dataset()

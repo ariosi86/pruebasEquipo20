@@ -94,7 +94,7 @@ La arquitectura del proyecto sigue la estructura estándar de **Cookiecutter Dat
 
 ### Paso 1: Clonar el proyecto
 ```bash
-git clone [https://github.com/](https://github.com/)[ORGANIZACION_O_USUARIO]/TC5061-Proyecto-Equipo20.git
+git clone https://github.com/ariosi86/TC5061-Proyecto-Equipo20.git
 cd TC5061-Proyecto-Equipo20
 ```
 
