@@ -60,26 +60,24 @@ def ejecutar_pruebas_inferencia():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
 
-        # 1. Prueba de Inferencia P1
-        logger.info("Probando inferencia de P1 (predict_p1.py)...")
+        # 1. P1: Demanda Horaria
+        logger.info("Generando muestra y ejecutando inferencia P1 (predict_p1.py)...")
         df_p1, _ = construir_dataset_p1()
         sample_p1_in = tmp_path / "sample_p1_input.parquet"
         df_p1.tail(200).to_parquet(sample_p1_in, index=False)
         run_predict_p1(input_path=sample_p1_in, output_path=sample_p1_out)
 
-        # 2. Prueba de Inferencia P2 (Muestra aleatoria representativa para capturar riesgo)
-        logger.info("Probando inferencia de P2 (predict_p2.py)...")
-        logger.info("Construyendo matriz de características para P2...")
+        # 2. P2: Riesgo de Desbalance
+        logger.info("Generando muestra y ejecutando inferencia P2 (predict_p2.py)...")
         df_p2 = construir_dataset_p2()
         sample_p2_in = tmp_path / "sample_p2_input.parquet"
         df_p2.sample(n=min(200, len(df_p2)), random_state=42).to_parquet(
             sample_p2_in, index=False
         )
-        logger.info("Muestra de entrada P2 creada (200 filas). Ejecutando inferencia...")
         run_predict_p2(input_path=sample_p2_in, output_path=sample_p2_out, umbral=0.5)
 
-        # 3. Prueba de Inferencia P3
-        logger.info("Probando inferencia de P3 (predict_p3.py)...")
+        # 3. P3: Clustering de Estaciones
+        logger.info("Generando muestra y ejecutando inferencia P3 (predict_p3.py)...")
         cols = ["viaje_id", "inicio_del_viaje", "fin_del_viaje", "origen_id", "destino_id"]
         df_trips = pd.read_parquet(TRIPS_PROCESSED_PATH, columns=cols)
         df_stations = pd.read_parquet(STATIONS_PROCESSED_PATH)
@@ -93,57 +91,74 @@ def ejecutar_pruebas_inferencia():
         perfil_test.reset_index().to_parquet(sample_p3_in, index=False)
         run_predict_p3(input_path=sample_p3_in, output_path=sample_p3_out)
 
-    # --- FASE 2: RESUMEN EJECUTIVO CONSOLIDADO EN CONSOLA (P1, P2, P3) ---
-    logger.info("\n" + "=" * 60)
-    logger.info("TABLERO EJECUTIVO DE INFERENCIA EN PRODUCCIÓN")
-    logger.info("=" * 60)
+    # --- FASE 2: TABLERO EJECUTIVO UNIFICADO EN UN SOLO LOG ---
+    W = 76
+    lineas = [
+        "",
+        "┌" + "─" * (W - 2) + "┐",
+        f"│{'TABLERO EJECUTIVO DE INFERENCIA EN PRODUCCIÓN':^{W - 2}}│",
+        "├" + "─" * (W - 2) + "┤",
+    ]
 
-    # 1. Resumen P1 (Demanda)
+    # P1: Demanda Horaria
     if sample_p1_out.exists():
-        df_res_p1 = pd.read_parquet(sample_p1_out)
-        demanda_media = df_res_p1["demanda_predicha"].mean()
-        demanda_max = df_res_p1["demanda_predicha"].max()
-        logger.info(
-            f"• P1 [Demanda Horaria]: {len(df_res_p1)} registros | "
-            f"Media: {demanda_media:.2f} viajes/h | Pico máx: {demanda_max:.2f} viajes/h"
-        )
-        cols_p1 = [c for c in ["estacion_id", "hora", "demanda_predicha"] if c in df_res_p1.columns]
-        if cols_p1:
-            logger.info("  Muestra P1:\n" + df_res_p1[cols_p1].head(3).to_string(index=False))
+        df_p1_res = pd.read_parquet(sample_p1_out)
+        media_p1 = df_p1_res["demanda_predicha"].mean()
+        max_p1 = df_p1_res["demanda_predicha"].max()
+        lineas.extend([
+            f"│  [P1] DEMANDA HORARIA (Regresión Lineal)                              │",
+            f"│       • Registros: {len(df_p1_res):<6} | Media: {media_p1:.2f} viajes/h | Pico máx: {max_p1:.2f} viajes/h │",
+            f"│       • Vista previa:                                                │",
+        ])
+        cols_p1 = [c for c in ["origen_id", "target_hour", "demanda_predicha"] if c in df_p1_res.columns]
+        if not cols_p1:
+            cols_p1 = ["demanda_predicha"]
+        for row in df_p1_res[cols_p1].head(3).to_string(index=False).split("\n"):
+            lineas.append(f"│         {row:<63}│")
+        lineas.append("├" + "─" * (W - 2) + "┤")
 
-    # 2. Resumen P2 (Riesgo de Desbalance)
+    # P2: Riesgo de Desbalance
     if sample_p2_out.exists():
-        df_res_p2 = pd.read_parquet(sample_p2_out)
-        n_riesgo = int(df_res_p2["pred_riesgo"].sum())
-        n_total = len(df_res_p2)
-        pct = (n_riesgo / n_total) * 100 if n_total > 0 else 0.0
-        logger.info(
-            f"• P2 [Riesgo Desbalance]: {n_riesgo}/{n_total} estaciones en riesgo ({pct:.1f}%) con umbral 0.5"
-        )
-        cols_p2 = [c for c in ["estacion_id", "hora", "prob_riesgo", "pred_riesgo"] if c in df_res_p2.columns]
+        df_p2_res = pd.read_parquet(sample_p2_out)
+        n_riesgo = int(df_p2_res["pred_riesgo"].sum())
+        total_p2 = len(df_p2_res)
+        pct = (n_riesgo / total_p2 * 100) if total_p2 > 0 else 0.0
+        lineas.extend([
+            f"│  [P2] RIESGO DE DESBALANCE (Logistic Regression)                      │",
+            f"│       • Estaciones en riesgo: {n_riesgo}/{total_p2} ({pct:.1f}%) [Umbral: 0.50]           │",
+            f"│       • Vista previa:                                                │",
+        ])
+        cols_p2 = [c for c in ["estacion_id", "hora", "prob_riesgo", "pred_riesgo"] if c in df_p2_res.columns]
         if cols_p2:
-            logger.info("  Muestra P2:\n" + df_res_p2[cols_p2].head(3).to_string(index=False))
+            for row in df_p2_res[cols_p2].head(3).to_string(index=False).split("\n"):
+                lineas.append(f"│         {row:<63}│")
+        lineas.append("├" + "─" * (W - 2) + "┤")
 
-    # 3. Resumen P3 (Segmentación K-Means)
+    # P3: Clustering de Estaciones
     if sample_p3_out.exists():
-        df_res_p3 = pd.read_csv(sample_p3_out)
-        dist_grupos = df_res_p3["grupo"].value_counts().to_dict()
-        logger.info(
-            f"• P3 [Clustering K-Means]: {len(df_res_p3)} estaciones asignadas | Distribución: {dist_grupos}"
-        )
-        cols_p3 = [c for c in ["origen_id", "grupo", "viajes_dia_log"] if c in df_res_p3.columns]
+        df_p3_res = pd.read_csv(sample_p3_out)
+        dist_p3 = str(df_p3_res["grupo"].value_counts().to_dict())
+        lineas.extend([
+            f"│  [P3] CLUSTERING FUNCIONAL (K-Means K=4)                             │",
+            f"│       • Asignadas: {len(df_p3_res)} estaciones                                        │",
+            f"│       • Distribución: {dist_p3:<49}│",
+            f"│       • Vista previa:                                                │",
+        ])
+        cols_p3 = [c for c in ["origen_id", "grupo", "viajes_dia_log"] if c in df_p3_res.columns]
         if not cols_p3:
-            cols_p3 = df_res_p3.columns[:3]
-        logger.info("  Muestra P3:\n" + df_res_p3[cols_p3].head(3).to_string(index=False))
+            cols_p3 = df_p3_res.columns[:3]
+        for row in df_p3_res[cols_p3].head(3).to_string(index=False).split("\n"):
+            lineas.append(f"│         {row:<63}│")
+        lineas.append("└" + "─" * (W - 2) + "┘")
 
-    logger.info("=" * 60 + "\n")
+    logger.info("\n" + "\n".join(lineas))
 
 
 def ejecutar_suite_pytest():
     """Ejecuta pytest directamente sobre el directorio interno proyecto_mibici/tests/."""
     tests_dir = PROJ_ROOT / "proyecto_mibici" / "tests"
     if tests_dir.exists():
-        logger.info(f"Ejecutando suite de pruebas con pytest en {tests_dir}...")
+        logger.info(f"Ejecutando suite de pruebas automatizadas en {tests_dir}...")
         resultado = subprocess.run(
             [sys.executable, "-m", "pytest", str(tests_dir), "-v"],
             cwd=PROJ_ROOT,
@@ -175,34 +190,34 @@ def main(
 ):
     inicio_total = time.time()
 
-    logger.info("==========================================================")
-    logger.info("INICIANDO PIPELINE INTEGRAL MIBICI (DATOS + TRAIN + TESTS)")
-    logger.info("==========================================================")
+    logger.info("=" * 76)
+    logger.info("       INICIANDO PIPELINE INTEGRAL MIBICI (DATOS + TRAIN + TESTS)    ")
+    logger.info("=" * 76)
 
-    # ETAPA 1: DATOS (Lógica robusta con opción force)
+    # ETAPA 1: DATOS
     archivos_existen = TRIPS_PROCESSED_PATH.exists() and STATIONS_PROCESSED_PATH.exists()
 
     if force_data:
-        logger.info("[Etapa 1/6] Parámetro --force-data activado. Forzando re-descarga y procesamiento de datos...")
+        logger.info("[Etapa 1/6] Parámetro --force activado. Re-descargando datos...")
         run_dataset()
     elif skip_data and archivos_existen:
         logger.info("[Etapa 1/6] Omitiendo descarga (--skip-data activado y parquets detectados).")
     elif not archivos_existen:
-        logger.info("[Etapa 1/6] Archivos Parquet no encontrados. Ejecutando dataset.py...")
+        logger.info("[Etapa 1/6] Parquets no encontrados. Ejecutando dataset.py...")
         run_dataset()
     else:
-        logger.info("[Etapa 1/6] Archivos Parquet detectados. Usando datos existentes (usa --force-data para re-descargar).")
+        logger.info("[Etapa 1/6] Parquets detectados. Usando datos existentes.")
 
     # ETAPA 2: ENTRENAMIENTO P1
-    logger.info("[Etapa 2/6] Entrenando y registrando P1 (Demanda Horaria)...")
+    logger.info("[Etapa 2/6] Entrenando y evaluando P1 (Demanda Horaria - 6 Modelos)...")
     run_train_p1()
 
     # ETAPA 3: ENTRENAMIENTO P2
-    logger.info("[Etapa 3/6] Entrenando y registrando P2 (Riesgo de Desbalance)...")
+    logger.info("[Etapa 3/6] Entrenando y evaluando P2 (Riesgo de Desbalance)...")
     run_train_p2()
 
     # ETAPA 4: ENTRENAMIENTO P3
-    logger.info("[Etapa 4/6] Entrenando y registrando P3 (Clustering de Estaciones)...")
+    logger.info("[Etapa 4/6] Entrenando y evaluando P3 (Clustering K-Means K=4)...")
     run_train_p3()
 
     if not skip_tests:
@@ -215,9 +230,9 @@ def main(
         ejecutar_suite_pytest()
 
     duracion = (time.time() - inicio_total) / 60
-    logger.success("==========================================================")
-    logger.success(f"PIPELINE Y TESTING COMPLETADOS CON ÉXITO EN {duracion:.2f} MINUTOS")
-    logger.success("==========================================================")
+    logger.success("=" * 76)
+    logger.success(f" PIPELINE Y TESTING COMPLETADOS CON ÉXITO EN {duracion:.2f} MINUTOS ")
+    logger.success("=" * 76)
 
 
 if __name__ == "__main__":
