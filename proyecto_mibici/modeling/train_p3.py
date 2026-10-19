@@ -6,6 +6,7 @@ Compara e imprime en consola:
   - Baseline Geográfico por Municipio
   - Modelo Candidato: KMeans (K=4) con StandardScaler
 Exporta métricas en reports/p3_comparacion.csv y asignaciones en reports/p3_predicciones_modelos.parquet.
+Serializa el modelo oficial en models/p3_kmeans_model.pkl.
 """
 
 from pathlib import Path
@@ -102,14 +103,14 @@ def main():
     etiquetas_mun_train = municipio_serie.reindex(perfil_train.index).astype("category").cat.codes.to_numpy()
     etiquetas_mun_test = municipio_serie.reindex(perfil_test.index).astype("category").cat.codes.to_numpy()
 
-    # Añadir columna temporal de referencia a los perfiles para compatibilidad con tracker.armar_params_tags
+    # Añadir columna temporal de referencia para compatibilidad con tracker.armar_params_tags
     perfil_train_tracking = perfil_train.copy()
     perfil_test_tracking = perfil_test.copy()
     perfil_train_tracking["periodo_referencia"] = pd.Timestamp(P3_TRAIN_INICIO)
     perfil_test_tracking["periodo_referencia"] = pd.Timestamp(P3_TEST_INICIO)
 
     splits = {"Train": perfil_train_tracking, "Test": perfil_test_tracking}
-    
+
     params_base, tags_base = tracker.armar_params_tags(
         "P3",
         splits,
@@ -177,9 +178,10 @@ def main():
     )
     modelo_kmeans.fit(perfil_train[P3_VARIABLES])
 
-    # Persistir modelo serializado oficial
-    ruta_modelo = MODELS_DIR / "p3_kmeans_pipeline.pkl"
+    # Guardar el modelo con el nombre esperado por pytest (p3_kmeans_model.pkl) y alias de compatibilidad
+    ruta_modelo = MODELS_DIR / "p3_kmeans_model.pkl"
     modelo_kmeans.save(ruta_modelo)
+    modelo_kmeans.save(MODELS_DIR / "p3_kmeans_pipeline.pkl")
     logger.info(f"Pipeline P3 persistido exitosamente en {ruta_modelo}")
 
     pred_train_k = modelo_kmeans.labels_
@@ -198,15 +200,6 @@ def main():
         df_stations,
         f"Grupos de Estaciones MiBici (KMeans K={P3_K_ELEGIDO})",
     )
-
-    resumen_grupos = (
-        perfil_train[P3_VARIABLES]
-        .assign(grupo=pred_train_k)
-        .groupby("grupo")
-        .mean()
-        .round(2)
-    )
-    resumen_grupos["n_estaciones"] = pd.Series(pred_train_k).value_counts().sort_index().values
 
     tracker.registrar_run(
         run_name="P3_kmeans_k4",
