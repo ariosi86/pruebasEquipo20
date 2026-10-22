@@ -5,7 +5,7 @@ Script de entrenamiento, evaluación y registro en MLflow para P3 (Segmentación
 Compara e imprime en consola:
   - Baseline Geográfico por Municipio
   - Modelo Candidato: KMeans (K=4) con StandardScaler
-Exporta métricas en reports/p3_comparacion.csv y asignaciones en reports/p3_predicciones_modelos.parquet.
+Exporta métricas en reports/p3_comparacion.parquet y asignaciones en reports/p3_predicciones_modelos.parquet.
 Serializa el modelo oficial en models/p3_kmeans_model.pkl.
 """
 
@@ -103,7 +103,7 @@ def main():
     etiquetas_mun_train = municipio_serie.reindex(perfil_train.index).astype("category").cat.codes.to_numpy()
     etiquetas_mun_test = municipio_serie.reindex(perfil_test.index).astype("category").cat.codes.to_numpy()
 
-    # Añadir columna temporal de referencia para compatibilidad con tracker.armar_params_tags
+    # Añadir columna temporal de referencia para tracking
     perfil_train_tracking = perfil_train.copy()
     perfil_test_tracking = perfil_test.copy()
     perfil_train_tracking["periodo_referencia"] = pd.Timestamp(P3_TRAIN_INICIO)
@@ -153,7 +153,7 @@ def main():
     )
 
     tracker.registrar_run(
-        run_name="P3_baseline_municipio",
+        run_name="p3-baseline-municipio",
         params={**params_base, "modelo": "BaselineMunicipio"},
         tags={**tags_base, "version": "baseline_municipio"},
         tabla=pd.DataFrame([m_base_train, m_base_test]),
@@ -178,7 +178,6 @@ def main():
     )
     modelo_kmeans.fit(perfil_train[P3_VARIABLES])
 
-    # Guardar el modelo con el nombre esperado por pytest (p3_kmeans_model.pkl) y alias de compatibilidad
     ruta_modelo = MODELS_DIR / "p3_kmeans_model.pkl"
     modelo_kmeans.save(ruta_modelo)
     modelo_kmeans.save(MODELS_DIR / "p3_kmeans_pipeline.pkl")
@@ -193,7 +192,12 @@ def main():
     df_predicciones["grupo_kmeans_k4"] = pred_test_k
     imprimir_metricas_modelo("kmeans_k4", m_k_train, m_k_test)
 
-    # Mapa de clústeres y resumen funcional
+    # Resumen descriptivo de los clusters
+    perfil_grupos = perfil_train[P3_VARIABLES].assign(grupo=pred_train_k)
+    resumen_grupos = perfil_grupos.groupby("grupo").mean().round(2)
+    resumen_grupos["n_estaciones"] = perfil_grupos["grupo"].value_counts()
+
+    # Mapa de clústeres
     fig_mapa_kmeans = graficar_mapa_grupos(
         perfil_train,
         pred_train_k,
@@ -201,13 +205,15 @@ def main():
         f"Grupos de Estaciones MiBici (KMeans K={P3_K_ELEGIDO})",
     )
 
+    estimador_pipeline = getattr(modelo_kmeans, "pipeline_", getattr(modelo_kmeans, "pipeline", None))
+
     tracker.registrar_run(
-        run_name="P3_kmeans_k4",
-        params={**params_base, "modelo": "KMeans", "n_clusters": P3_K_ELEGIDO},
+        run_name="p3-kmeans-k4",
+        params={**params_base, "modelo": "KMeans", "n_clusters": P3_K_ELEGIDO, "n_init": 10},
         tags={**tags_base, "version": "v1_kmeans"},
         tabla=pd.DataFrame([m_k_train, m_k_test]),
-        tabla_est=pd.DataFrame(),
-        modelo=modelo_kmeans.pipeline,
+        tabla_est=resumen_grupos.reset_index(),
+        modelo=estimador_pipeline,
         X_ejemplo=perfil_train[P3_VARIABLES].head(5),
         figuras={"mapa_kmeans_k4": fig_mapa_kmeans},
     )
@@ -221,43 +227,21 @@ def main():
     })
 
     # -------------------------------------------------------------
-    # 3. GUARDAR Y MOSTRAR TABLA COMPARATIVA DE MÉTRICAS
+    # 3. GUARDAR Y MOSTRAR TABLA COMPARATIVA (SOLO PARQUET)
     # -------------------------------------------------------------
     df_p3_comp = pd.DataFrame(filas_comparacion).set_index("modelo")
-    p3_comp_path = REPORTS_DIR / "p3_comparacion.csv"
-    df_p3_comp.round(3).to_csv(p3_comp_path)
+    p3_comp_path = REPORTS_DIR / "p3_comparacion.parquet"
+    df_p3_comp.round(3).reset_index().to_parquet(p3_comp_path, index=False)
 
-    tabla_metricas_str = df_p3_comp.round(3).to_string()
-    logger.info(
-        f"\n{'='*75}\n"
-        f"        RESUMEN COMPARATIVO DE MODELOS (P3 - CLUSTERING DE ESTACIONES)\n"
-        f"{'='*75}\n"
-        f"{tabla_metricas_str}\n"
-        f"{'='*75}\n"
-        f"Archivo guardado en: {p3_comp_path}"
-    )
+    logger.info(f"Reporte de entrenamiento P3 guardado en Parquet: {p3_comp_path}")
+    logger.info("\n" + df_p3_comp.round(3).to_string())
 
     # -------------------------------------------------------------
-    # 4. GUARDAR Y MOSTRAR ASIGNACIONES DE CLÚSTERES
+    # 4. GUARDAR Y MOSTRAR ASIGNACIONES DE CLÚSTERES (PARQUET)
     # -------------------------------------------------------------
     preds_out_path = REPORTS_DIR / "p3_predicciones_modelos.parquet"
     df_predicciones.to_parquet(preds_out_path, index=False)
-
-    cols_mostrar = [
-        c for c in [
-            "origen_id", "baseline_municipio", "grupo_kmeans_k4",
-            "pct_manana", "pct_tarde", "pct_fin_de_semana", "viajes_dia_log"
-        ] if c in df_predicciones.columns
-    ]
-    tabla_preds_str = df_predicciones[cols_mostrar].head(10).to_string(index=False)
-    logger.info(
-        f"\n{'-'*75}\n"
-        f"        MUESTRA COMPARATIVA DE ASIGNACIONES (TEST - 10 ESTACIONES)\n"
-        f"{'-'*75}\n"
-        f"{tabla_preds_str}\n"
-        f"{'-'*75}\n"
-        f"Asignaciones consolidadas guardadas en: {preds_out_path}\n"
-    )
+    logger.success(f"Asignaciones consolidadas guardadas en: {preds_out_path}")
 
 
 if __name__ == "__main__":
