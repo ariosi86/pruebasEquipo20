@@ -329,3 +329,46 @@ Se genero de manera única de probar los modelos y que todo el proyecto funcione
   ```bash
   python -m proyecto_mibici.pipeline --skip-tests
   ```
+
+
+## Entrega 2
+### Ejecutar modelos de P1
+
+  ```bash
+  python -m proyecto_mibici.modeling.train_p1 --model <nombre> 
+  ```
+
+| Nombre modelo| `--model`  | Descripción |
+|---|---|---|
+| Baseline (lineal v2) | `baseline`  | Modelo seleccionado como baseline. Regresión Lineal con media móvil |
+| Poisson lineal (candidato)| `poisson`  | Candidato 1. Regresión de Poisson |
+| LightGBM-Poisson (candidato) | `lgbm_poisson`  | Candidato 2. Entrenado con los parámetros obtenidos como mejor resultado del nested search |
+| LightGBM-Poisson (nested search)| `lgbm_p_search`  | Búsqueda anidada para encontrar al mejor candidato. |
+| LightGBM-Tweedie (candidato)  | `lgbm_tweedie`  | Búsqueda anidada para encontrar al mejor candidato. |
+| LightGBM-Tweedie (nested_search)  | `lgbm_t_search`  | Candidato 3. Entrenado con los parámetros obtenidos como mejor resultado del nested search |
+| Lineal v1 | `v1_lineal`  | Modelo utliizado para seleccionar baseline.|
+| Los 4 ingenuos | `ingenuos`  | Modelos utliizados para seleccionar baseline.|
+
+Acepta también en el CLI:
+
+ ```bash
+  python -m proyecto_mibici.modeling.train_p1 --lr <learning_rate> --alpha <alpha> --max_iter <max_iter> 
+  ```
+Los modelos candidatos registran como tags:
+| Nombre modelo| `model_family`  | `stage_of_work` | Extra |
+|---|---|---|---|
+| baseline| linear | baseline |  `baseline=true ` |
+| poisson| poisson_regression | candidato |   |
+| lgbm_poisson| candidato | lightgbm | |
+| lgbm_p_search| search | lightgbm | |
+| lgbm_tweedie| candidato | lightgbm |  |
+| lgbm_t_search| search | lightgbm |   |
+| Lineal v1| linear | baseline |   |
+| Los 4 ingenuos| naive | baseline |   |
+
+
+
+
+
+
+
