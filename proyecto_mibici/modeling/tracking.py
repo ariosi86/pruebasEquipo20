@@ -126,6 +126,7 @@ class MLFlowTracker:
         modelo=None,
         X_ejemplo=None,
         figuras: dict = None,
+        serialization_format: str = None, #NUEVO: Added serialization_format parameter
     ) -> str:
         """Crea un run con parámetros, métricas, modelo, figuras y tabla por estación."""
         with mlflow.start_run(run_name=run_name) as run:
@@ -140,12 +141,16 @@ class MLFlowTracker:
                         signature = infer_signature(X_ejemplo, modelo.predict(X_ejemplo))
                     except Exception:
                         signature = None
+                kwargs_modelo = {}                                   # NUEVO
+                if serialization_format is not None:                 # NUEVO
+                    kwargs_modelo["serialization_format"] = serialization_format
 
                 mlflow.sklearn.log_model(
                     sk_model=modelo,
                     name="model",
                     signature=signature,
                     input_example=X_ejemplo,
+                    **kwargs_modelo,                                 # NUEVO
                 )
 
             if figuras:
