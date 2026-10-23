@@ -126,7 +126,6 @@ def main(
     learning_rate: float = typer.Option(0.05, "--lr", help="Tasa de aprendizaje para Poisson o LightGBM."),
     alpha: float = typer.Option(0.0001, "--alpha", help='Tasa de penalización para Poisson'),
     max_iter: int = typer.Option(300, "--max_iter", help="Max iterations para Poisson"),
-    n_estimators: int = typer.Option(100, "--n-estimators", help="Número de árboles para LightGBM."),
 ):
 
     tracker = MLFlowTracker(
@@ -305,7 +304,7 @@ def main(
 
     elif model == "poisson":
 
-        logger.info(f"--- Entrenando Candidato: Regresión de Poisson (lr={learning_rate}, pen={alpha}, max_iter={max_iter}) ---")
+        logger.info(f"--- Entrenando Candidato: Regresión de Poisson (lr={learning_rate}, pen={alpha}, max_iter={max_iter}) ---",)
         poisson_model = DemandaPoissonP1(features=P1_FEATURES_V2, alpha=alpha, max_iter=max_iter)
  
         poisson_model.fit(df_train[P1_FEATURES_V2], y_train)
