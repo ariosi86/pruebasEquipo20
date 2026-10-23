@@ -2,19 +2,22 @@
 # -*- coding: utf-8 -*-
 """
 Script de entrenamiento, evaluación y registro en MLflow para P1 (Demanda Horaria).
-Integra, evalúa y registra en MLflow los 6 modelos:
-  - 4 baselines ingenuos (persistencia, lag 24h, lag 168h, promedio 24h/168h)
-  - v1 Regresión Lineal (lags + componentes temporales)
-  - v2 Regresión Lineal (lags + calendario + medias móviles rolling_3h y rolling_168h)
-Exporta métricas en reports/p1_comparacion.parquet y predicciones en reports/p1_predicciones_modelos.parquet.
+Integra baselines, Regresión Lineal (v1, v2) y el candidato LightGBM Poisson.
+
+Exporta predicciones en reports/p1_predicciones_modelos.parquet.
 """
 
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import typer
+import mlflow
+import itertools
+import time
+import lightgbm as lgb
 from loguru import logger
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error
+
 
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_NAME,
@@ -27,13 +30,18 @@ from proyecto_mibici.config import (
     P1_VAL_INICIO,
     REPORTS_DIR,
     URI_MLFLOW_TRACKING,
+    RANDOM_SEED,
+    P1_LGBM_GRID_POISSON,
+    P1_LGBM_GRID_TWEEDIE,
+
 )
 from proyecto_mibici.features import construir_dataset_p1
-from proyecto_mibici.modeling.model_p1 import BaselineIngenuoP1, DemandaLinealP1
+from proyecto_mibici.modeling.model_p1 import BaselineIngenuoP1, DemandaLinealP1, DemandaPoissonP1
 from proyecto_mibici.modeling.tracking import MLFlowTracker
 from proyecto_mibici.plots import figuras_p1
 
-app = typer.Typer()
+
+app = typer.Typer(help="CLI modular para entrenar y registrar modelos de P1.")
 
 
 def evaluar_metricas_regresion(y_real, y_pred, conjunto_nombre: str) -> dict:
@@ -94,9 +102,33 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_val: dict, m_test: di
         f"Test -> MAE: {m_test['MAE']:.3f} | RMSE: {m_test['RMSE']:.3f} | WAPE: {m_test['WAPE']:.3f} | Sesgo: {m_test['Sesgo']:.3f}"
     )
 
+#------------------------------------
+# SIMPLFIFIED FUNCTIONS FOR MODELS
+#------------------------------------
+def registrar_fila_comparacion(filas_comparacion, nombre_modelo, m_train, m_val, m_test):
+    """Agrega las métricas de un modelo a la lista de comparación general."""
+    filas_comparacion.append({
+        "modelo": nombre_modelo,
+        "train_mae": m_train["MAE"],
+        "train_wape": m_train["WAPE"],
+        "val_wape": m_val["WAPE"],
+        "test_mae": m_test["MAE"],
+        "test_rmse": m_test["RMSE"],
+        "test_wape": m_test["WAPE"],
+        "test_sesgo": m_test["Sesgo"],
+    })
+
+
 
 @app.command()
-def main():
+def main(
+    model: str = typer.Option("baseline", "--model", "-m", help="Modelo a entrenar: 'baseline', 'poisson', 'lgbm_poisson', 'lgbm_search' , 'ingenuos', 'v1_lineal'."),
+    learning_rate: float = typer.Option(0.05, "--lr", help="Tasa de aprendizaje para Poisson o LightGBM."),
+    alpha: float = typer.Option(0.0001, "--alpha", help='Tasa de penalización para Poisson'),
+    max_iter: int = typer.Option(300, "--max_iter", help="Max iterations para Poisson"),
+    n_estimators: int = typer.Option(100, "--n-estimators", help="Número de árboles para LightGBM."),
+):
+
     tracker = MLFlowTracker(
         tracking_uri=URI_MLFLOW_TRACKING,
         experiment_name=MLFLOW_EXPERIMENT_NAME,
@@ -123,6 +155,10 @@ def main():
 
     col_tiempo = "target_hour" if "target_hour" in df_p1.columns else "hour_window"
     logger.info(f"Columna temporal usada para partición: '{col_tiempo}'")
+
+    #------------------------------------------------
+    # TEST / VAL / TRAIN SPLIT
+    #------------------------------------------------
 
     # Partición temporal idéntica al notebook (< P1_TEST_FIN)
     df_con_target = df_p1.dropna(subset=[target_col]).copy()
@@ -180,176 +216,342 @@ def main():
     df_predicciones = df_test[cols_identificadores].copy()
     df_predicciones["real"] = y_test.values
 
-    # -------------------------------------------------------------
-    # 1. EVALUACIÓN Y REGISTRO DE 4 MODELOS INGENUOS (BASELINES)
-    # -------------------------------------------------------------
-    logger.info("--- Evaluando Modelos Ingenuos (Baselines) ---")
-    estrategias_ingenuas = [
-        ("naive_persistencia", "persistencia"),
-        ("naive_lag_24h", "lag_24h"),
-        ("naive_lag_168h", "lag_168h"),
-        ("naive_promedio_24h_168h", "promedio_24h_168h"),
-    ]
+    #--------------------------------
+    # ENTRENAR LGBM
+    #-------------------------------
 
-    for nombre_run, estrategia in estrategias_ingenuas:
-        modelo_ingenuo = BaselineIngenuoP1(estrategia=estrategia)
-        pred_train = modelo_ingenuo.predict(df_train)
-        pred_val = modelo_ingenuo.predict(df_val)
-        pred_test = modelo_ingenuo.predict(df_test)
+    def entrenar_lgbm_candidato(hp: dict, nombre: str = "lgbm", extra_tags: dict = None):
+        logger.info(f"--- Entrenando Candidato: LightGBM {hp['objective']} ({nombre}) {hp} ---")
+        modelo = lgb.LGBMRegressor(random_state=RANDOM_SEED, **hp)
+        modelo.fit(df_train[P1_FEATURES_V2], y_train)
 
-        df_predicciones[nombre_run] = np.round(pred_test, 2)
+        pred_train = np.clip(modelo.predict(df_train[P1_FEATURES_V2]), 0, None)
+        pred_val = np.clip(modelo.predict(df_val[P1_FEATURES_V2]), 0, None)
+        pred_test = np.clip(modelo.predict(df_test[P1_FEATURES_V2]), 0, None)
+        df_predicciones[nombre] = np.round(pred_test, 2)
 
         m_train = evaluar_metricas_regresion(y_train, pred_train, "Train")
         m_val = evaluar_metricas_regresion(y_val, pred_val, "Validación")
         m_test = evaluar_metricas_regresion(y_test, pred_test, "Test")
-
-        imprimir_metricas_modelo(nombre_run, m_train, m_val, m_test)
-
-        tabla_metricas = pd.DataFrame([m_train, m_val, m_test])
-        tabla_est = calcular_metricas_por_estacion(df_test, pred_test, target_col, df_stations)
+        imprimir_metricas_modelo(nombre, m_train, m_val, m_test)
 
         tracker.registrar_run(
-            run_name=f"P1_{nombre_run}",
+            run_name=f"P1_{nombre}",
+            params={**params_base,
+            "modelo": f"LightGBM_{hp['objective']}",
+            "variables": ", ".join(P1_FEATURES_V2),
+            **hp},
+            tags={**tags_base, "version": nombre, "stage_of_work": "candidate",
+                "model_family": "lightgbm", **(extra_tags or {})},
+            tabla=pd.DataFrame([m_train, m_val, m_test]),
+            tabla_est=calcular_metricas_por_estacion(df_test, pred_test, target_col, df_stations),
+            modelo=modelo,
+            X_ejemplo=df_train[P1_FEATURES_V2].head(5),
+            figuras=figuras_p1(df_test, pred_test, target_col, nombre),
+            serialization_format="cloudpickle",
+        )
+        registrar_fila_comparacion(filas_comparacion, nombre, m_train, m_val, m_test)
+
+    # ----------------------------------------------------------------
+    # 1. MODELO BASELINE DEFINIDO (v2): REGRESIÓN LINEAL CON ROLLING
+    # ----------------------------------------------------------------
+
+    if model == "baseline":
+        logger.info("--- Entrenando Modelo v2: Regresión Lineal + Medias Móviles ---")
+        modelo_v2 = DemandaLinealP1(features=P1_FEATURES_V2)
+        modelo_v2.fit(df_train[P1_FEATURES_V2], y_train)
+
+        ruta_modelo_v2 = MODELS_DIR / "p1_v2_model.pkl"
+        modelo_v2.save(ruta_modelo_v2)
+        modelo_v2.save(MODELS_DIR / "p1_linear_model.pkl")
+        logger.info(f"Modelo baseline guardado en {ruta_modelo_v2}")
+
+        pred_v2_train = modelo_v2.predict(df_train[P1_FEATURES_V2])
+        pred_v2_val = modelo_v2.predict(df_val[P1_FEATURES_V2])
+        pred_v2_test = modelo_v2.predict(df_test[P1_FEATURES_V2])
+        df_predicciones["Baseline_lineal_rolling"] = np.round(pred_v2_test, 2)
+
+        m_v2_train = evaluar_metricas_regresion(y_train, pred_v2_train, "Train")
+        m_v2_val = evaluar_metricas_regresion(y_val, pred_v2_val, "Validación")
+        m_v2_test = evaluar_metricas_regresion(y_test, pred_v2_test, "Test")
+
+        imprimir_metricas_modelo("Baseline_lineal_rolling", m_v2_train, m_v2_val, m_v2_test)
+
+        tabla_est_v2 = calcular_metricas_por_estacion(df_test, pred_v2_test, target_col, df_stations)
+        figuras_v2 = figuras_p1(df_test, pred_v2_test, target_col, "v2")
+
+        tracker.registrar_run(
+            run_name="P1_v2_rolling_mean",
             params={
                 **params_base,
-                "modelo": nombre_run,
-                "variables_predictoras": "ninguna (regla fija)",
+                "modelo": "LinearRegression",
+                "variables_predictoras": ", ".join(P1_FEATURES_V2),
+                "postprocesamiento": "np.clip(predicciones, 0, None)",
             },
-            tags={**tags_base, "version": nombre_run},
-            tabla=tabla_metricas,
-            tabla_est=tabla_est,
+            tags={**tags_base, "version": "Baseline", "stage_of_work": "baseline", "model_family": "linear_regression", "baseline": "true"},
+            tabla=pd.DataFrame([m_v2_train, m_v2_val, m_v2_test]),
+            tabla_est=tabla_est_v2,
+            modelo=modelo_v2,
+            X_ejemplo=df_train[P1_FEATURES_V2].head(5),
+            figuras=figuras_v2,
+            serialization_format="cloudpickle",
+    )
+
+        registrar_fila_comparacion(filas_comparacion, "baseline", m_v2_train, m_v2_val, m_v2_test)
+
+    # -------------------------------------------------------------
+    # POISSON 
+    # -------------------------------------------------------------
+
+    elif model == "poisson":
+
+        logger.info(f"--- Entrenando Candidato: Regresión de Poisson (lr={learning_rate}, pen={alpha}, max_iter={max_iter}) ---")
+        poisson_model = DemandaPoissonP1(features=P1_FEATURES_V2, alpha=alpha, max_iter=max_iter)
+ 
+        poisson_model.fit(df_train[P1_FEATURES_V2], y_train)
+        
+        ruta_modelo_poisson = MODELS_DIR / "p1_poisson_model.pkl"
+        logger.info(f"Modelo Poisson guardado en {ruta_modelo_poisson}")
+
+        pred_poisson_train = poisson_model.predict(df_train[P1_FEATURES_V2])
+        pred_poisson_val = poisson_model.predict(df_val[P1_FEATURES_V2])
+        pred_poisson_test = poisson_model.predict(df_test[P1_FEATURES_V2])
+        df_predicciones["poisson"] = np.round(pred_poisson_test, 2)
+
+        m_poisson_train = evaluar_metricas_regresion(y_train, pred_poisson_train, "Train")
+        m_poisson_val = evaluar_metricas_regresion(y_val, pred_poisson_val, "Validación")
+        m_poisson_test = evaluar_metricas_regresion(y_test, pred_poisson_test, "Test")
+
+        imprimir_metricas_modelo("poisson", m_poisson_train, m_poisson_val, m_poisson_test)
+
+        tabla_est_poisson = calcular_metricas_por_estacion(df_test, pred_poisson_test, target_col, df_stations)
+        figuras_poisson = figuras_p1(df_test, pred_poisson_test, target_col, "poisson")
+
+        tracker.registrar_run(
+            run_name="P1_poisson",
+            params={
+                **params_base,
+                "modelo": "PoissonRegression",
+                "variables_predictoras": ", ".join(P1_FEATURES_V2),
+                "postprocesamiento": "np.clip(predicciones, 0, None)",
+                "alpha": alpha,
+                "max_iter":max_iter,
+            },
+            tags={**tags_base, "version": "poisson", "stage_of_work": "candidato", "model_family": "poisson_regression"},
+            tabla=pd.DataFrame([m_poisson_train, m_poisson_val, m_poisson_test]),
+            tabla_est=tabla_est_poisson,
+            modelo=poisson_model,
+            X_ejemplo=df_train[P1_FEATURES_V2].head(5),
+            figuras=figuras_poisson,
+            serialization_format="cloudpickle",
+    )
+
+        registrar_fila_comparacion(filas_comparacion, "poisson", m_poisson_train, m_poisson_val, m_poisson_test)
+
+    # -------------------------------------------------------------
+    # LIGHT GBM - POISSON (NESTED SEARCH)
+    # -------------------------------------------------------------
+    elif model == "lgbm_p_search":
+        combinaciones = [dict(zip(P1_LGBM_GRID_POISSON, v)) for v in itertools.product(*P1_LGBM_GRID_POISSON.values())]
+        mejor_hp, mejor_wape = None, float("inf")
+
+        with mlflow.start_run(run_name="P1_lgbm_poisson_search") as padre:
+            mlflow.set_tags({**tags_base,"stage_of_work": "search", "model_family": "lightgbm"})
+            mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "validation_mae", "objetivo": "poisson"})
+
+            for i, hp in enumerate(combinaciones):
+                with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    mlflow.log_params(hp)
+                    logger.info(f"search_{i:02d}:{hp}")
+                    try:
+                        t0 = time.time()
+                        m = lgb.LGBMRegressor(random_state=RANDOM_SEED, **hp)
+                        m.fit(df_train[P1_FEATURES_V2], y_train)
+                        segundos = time.time() - t0
+
+                        pred_val = np.clip(m.predict(df_val[P1_FEATURES_V2]), 0, None)
+                        m_val = evaluar_metricas_regresion(y_val, pred_val, "Validación")
+
+                        mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "lightgbm"})
+                    
+                        mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
+                                        "train_seconds": segundos})
+                        if m_val["WAPE"] < mejor_wape:
+                            mejor_wape, mejor_hp = m_val["MAE"], hp
+                    except Exception as e:
+                        mlflow.set_tag("fallo", "true")
+                        mlflow.set_tag("error", str(e)[:250])
+                        logger.warning(f"search_{i:02d} falló y se omite: {e}")
+                        continue
+
+
+            mlflow.log_metric("best_validation_wape", mejor_wape)
+            mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
+            id_padre = padre.info.run_id
+
+        entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_poisson_tuned",
+                            extra_tags={"search_run_id": id_padre})
+    # -------------------------------------------------------------
+    # POISSON CANDIDATO
+    # -------------------------------------------------------------      
+    elif model == "lgbm_poisson":
+            entrenar_lgbm_candidato({"objective": "poisson","learning_rate": 0.1, "num_leaves": 127, "n_estimators": 600}, nombre="lgbm_poisson")
+
+
+    # -------------------------------------------------------------
+    # LIGHT GBM - TWEEDIE (NESTED SEARCH)
+    # -------------------------------------------------------------
+    elif model == "lgbm_t_search":
+        combinaciones = [dict(zip(P1_LGBM_GRID_TWEEDIE, v)) for v in itertools.product(*P1_LGBM_GRID_TWEEDIE.values())]
+        mejor_hp, mejor_wape = None, float("inf")
+
+        with mlflow.start_run(run_name="P1_lgbm_tweedie_search") as padre:
+            mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "lightgbm"})
+            mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "validation_mae", "objetivo": "tweedie"})
+
+            for i, hp in enumerate(combinaciones):
+                with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    mlflow.log_params(hp)
+                    logger.info(f"search_{i:02d}:{hp}")
+                    try:
+                        t0 = time.time()
+                        m = lgb.LGBMRegressor(random_state=RANDOM_SEED, **hp)
+                        m.fit(df_train[P1_FEATURES_V2], y_train)
+                        segundos = time.time() - t0
+
+                        pred_val = np.clip(m.predict(df_val[P1_FEATURES_V2]), 0, None)
+                        m_val = evaluar_metricas_regresion(y_val, pred_val, "Validación")
+
+                        mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "lightgbm"})
+                    
+                        mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
+                                        "train_seconds": segundos})
+                        if m_val["WAPE"] < mejor_wape:
+                            mejor_wape, mejor_hp = m_val["MAE"], hp
+                    except Exception as e:
+                        mlflow.set_tag("fallo", "true")
+                        mlflow.set_tag("error", str(e)[:250])
+                        logger.warning(f"search_{i:02d} falló y se omite: {e}")
+                        continue
+
+
+            mlflow.log_metric("best_validation_wape", mejor_wape)
+            mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
+            id_padre = padre.info.run_id
+
+        entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_tweedie_tuned",
+                            extra_tags={"search_run_id": id_padre})
+    # -------------------------------------------------------------
+    # TWEEDIE CANDIDATO
+    # -------------------------------------------------------------
+    elif model == "lgbm_tweedie":
+            entrenar_lgbm_candidato({"objective": "tweedie",
+                         "tweedie_variance_power": 1.5,
+                         "learning_rate": 0.1, "num_leaves": 127, "n_estimators": 600},
+                        nombre="lgbm_tweedie")
+
+    # -------------------------------------------------------------
+    # EVALUACIÓN Y REGISTRO DE 4 MODELOS INGENUOS (BASELINES)
+    # -------------------------------------------------------------
+    
+    elif model == "ingenuos":
+        logger.info("--- Evaluando Modelos Ingenuos (Baselines) ---")
+        estrategias_ingenuas = [
+            ("naive_persistencia", "persistencia"),
+            ("naive_lag_24h", "lag_24h"),
+            ("naive_lag_168h", "lag_168h"),
+            ("naive_promedio_24h_168h", "promedio_24h_168h"),
+            ]
+
+        for nombre_run, estrategia in estrategias_ingenuas:
+            modelo_ingenuo = BaselineIngenuoP1(estrategia=estrategia)
+            pred_train = modelo_ingenuo.predict(df_train)
+            pred_val = modelo_ingenuo.predict(df_val)
+            pred_test = modelo_ingenuo.predict(df_test)
+
+            df_predicciones[nombre_run] = np.round(pred_test, 2)
+
+            m_train = evaluar_metricas_regresion(y_train, pred_train, "Train")
+            m_val = evaluar_metricas_regresion(y_val, pred_val, "Validación")
+            m_test = evaluar_metricas_regresion(y_test, pred_test, "Test")
+
+            imprimir_metricas_modelo(nombre_run, m_train, m_val, m_test)
+
+            tabla_metricas = pd.DataFrame([m_train, m_val, m_test])
+            tabla_est = calcular_metricas_por_estacion(df_test, pred_test, target_col, df_stations)
+
+            tracker.registrar_run(
+                run_name=f"P1_{nombre_run}",
+                params={
+                    **params_base,
+                    "modelo": nombre_run,
+                    "variables_predictoras": "ninguna (regla fija)",
+            },
+                tags={**tags_base, "version": nombre_run, "stage_of_work": "baseline", "model_family": "naive"},
+                tabla=tabla_metricas,
+                tabla_est=tabla_est,
+                
+            )
+            registrar_fila_comparacion(filas_comparacion, nombre_run, m_train, m_val, m_test)
+   # -------------------------------------------------------------
+    # MODELO V1: REGRESIÓN LINEAL (SIN MEDIAS MÓVILES)
+    # -------------------------------------------------------------
+    elif model == 'v1_lineal':
+ 
+        logger.info("--- Entrenando Modelo v1: Regresión Lineal Base ---")
+        modelo_v1 = DemandaLinealP1(features=P1_FEATURES_V1)
+        modelo_v1.fit(df_train[P1_FEATURES_V1], y_train)
+
+        ruta_modelo_v1 = MODELS_DIR / "p1_v1_model.pkl"
+        modelo_v1.save(ruta_modelo_v1)
+        logger.info(f"Modelo v1 guardado en {ruta_modelo_v1}")
+
+        pred_v1_train = modelo_v1.predict(df_train[P1_FEATURES_V1])
+        pred_v1_val = modelo_v1.predict(df_val[P1_FEATURES_V1])
+        pred_v1_test = modelo_v1.predict(df_test[P1_FEATURES_V1])
+        df_predicciones["v1_lineal"] = np.round(pred_v1_test, 2)
+
+        m_v1_train = evaluar_metricas_regresion(y_train, pred_v1_train, "Train")
+        m_v1_val = evaluar_metricas_regresion(y_val, pred_v1_val, "Validación")
+        m_v1_test = evaluar_metricas_regresion(y_test, pred_v1_test, "Test")
+
+        imprimir_metricas_modelo("v1_lineal", m_v1_train, m_v1_val, m_v1_test)
+
+        tabla_est_v1 = calcular_metricas_por_estacion(df_test, pred_v1_test, target_col, df_stations)
+        figuras_v1 = figuras_p1(df_test, pred_v1_test, target_col, "v1")
+
+        tracker.registrar_run(
+            run_name="P1_v1_linear",
+            params={
+                **params_base,
+                "modelo": "LinearRegression",
+                "variables_predictoras": ", ".join(P1_FEATURES_V1),
+                "postprocesamiento": "np.clip(predicciones, 0, None)",
+            },
+            tags={**tags_base, "version": "v1", "stage_of_work": "baseline", "model_family": "linear_regression"},
+            tabla=pd.DataFrame([m_v1_train, m_v1_val, m_v1_test]),
+            tabla_est=tabla_est_v1,
+            modelo=modelo_v1,
+            X_ejemplo=df_train[P1_FEATURES_V1].head(5),
+            figuras=figuras_v1,
+            serialization_format="cloudpickle"
         )
+        registrar_fila_comparacion(filas_comparacion, "v1_lineal", m_v1_train, m_v1_val, m_v1_test)
 
-        filas_comparacion.append({
-            "modelo": nombre_run,
-            "train_mae": m_train["MAE"],
-            "train_wape": m_train["WAPE"],
-            "val_wape": m_val["WAPE"],
-            "test_mae": m_test["MAE"],
-            "test_rmse": m_test["RMSE"],
-            "test_wape": m_test["WAPE"],
-            "test_sesgo": m_test["Sesgo"],
-        })
+    else:
+        raise ValueError(f"Modelo desconocido: '{model}'. Revisa el parámetro --model.")
 
-    # -------------------------------------------------------------
-    # 2. MODELO V1: REGRESIÓN LINEAL (SIN MEDIAS MÓVILES)
-    # -------------------------------------------------------------
-    logger.info("--- Entrenando Modelo v1: Regresión Lineal Base ---")
-    modelo_v1 = DemandaLinealP1(features=P1_FEATURES_V1)
-    modelo_v1.fit(df_train[P1_FEATURES_V1], y_train)
-
-    ruta_modelo_v1 = MODELS_DIR / "p1_v1_model.pkl"
-    modelo_v1.save(ruta_modelo_v1)
-    logger.info(f"Modelo v1 guardado en {ruta_modelo_v1}")
-
-    pred_v1_train = modelo_v1.predict(df_train[P1_FEATURES_V1])
-    pred_v1_val = modelo_v1.predict(df_val[P1_FEATURES_V1])
-    pred_v1_test = modelo_v1.predict(df_test[P1_FEATURES_V1])
-    df_predicciones["v1_lineal"] = np.round(pred_v1_test, 2)
-
-    m_v1_train = evaluar_metricas_regresion(y_train, pred_v1_train, "Train")
-    m_v1_val = evaluar_metricas_regresion(y_val, pred_v1_val, "Validación")
-    m_v1_test = evaluar_metricas_regresion(y_test, pred_v1_test, "Test")
-
-    imprimir_metricas_modelo("v1_lineal", m_v1_train, m_v1_val, m_v1_test)
-
-    tabla_est_v1 = calcular_metricas_por_estacion(df_test, pred_v1_test, target_col, df_stations)
-    figuras_v1 = figuras_p1(df_test, pred_v1_test, target_col, "v1")
-
-    tracker.registrar_run(
-        run_name="P1_v1_linear",
-        params={
-            **params_base,
-            "modelo": "LinearRegression",
-            "variables_predictoras": ", ".join(P1_FEATURES_V1),
-            "postprocesamiento": "np.clip(predicciones, 0, None)",
-        },
-        tags={**tags_base, "version": "v1"},
-        tabla=pd.DataFrame([m_v1_train, m_v1_val, m_v1_test]),
-        tabla_est=tabla_est_v1,
-        modelo=modelo_v1.estimator_,
-        X_ejemplo=df_train[P1_FEATURES_V1].head(5),
-        figuras=figuras_v1,
-    )
-
-    filas_comparacion.append({
-        "modelo": "v1_lineal",
-        "train_mae": m_v1_train["MAE"],
-        "train_wape": m_v1_train["WAPE"],
-        "val_wape": m_v1_val["WAPE"],
-        "test_mae": m_v1_test["MAE"],
-        "test_rmse": m_v1_test["RMSE"],
-        "test_wape": m_v1_test["WAPE"],
-        "test_sesgo": m_v1_test["Sesgo"],
-    })
-
-    # -------------------------------------------------------------
-    # 3. MODELO V2: REGRESIÓN LINEAL CON ROLLING
-    # -------------------------------------------------------------
-    logger.info("--- Entrenando Modelo v2: Regresión Lineal + Medias Móviles ---")
-    modelo_v2 = DemandaLinealP1(features=P1_FEATURES_V2)
-    modelo_v2.fit(df_train[P1_FEATURES_V2], y_train)
-
-    ruta_modelo_v2 = MODELS_DIR / "p1_v2_model.pkl"
-    modelo_v2.save(ruta_modelo_v2)
-    modelo_v2.save(MODELS_DIR / "p1_linear_model.pkl")
-    logger.info(f"Modelo v2 guardado en {ruta_modelo_v2}")
-
-    pred_v2_train = modelo_v2.predict(df_train[P1_FEATURES_V2])
-    pred_v2_val = modelo_v2.predict(df_val[P1_FEATURES_V2])
-    pred_v2_test = modelo_v2.predict(df_test[P1_FEATURES_V2])
-    df_predicciones["v2_lineal_rolling"] = np.round(pred_v2_test, 2)
-
-    m_v2_train = evaluar_metricas_regresion(y_train, pred_v2_train, "Train")
-    m_v2_val = evaluar_metricas_regresion(y_val, pred_v2_val, "Validación")
-    m_v2_test = evaluar_metricas_regresion(y_test, pred_v2_test, "Test")
-
-    imprimir_metricas_modelo("v2_lineal_rolling", m_v2_train, m_v2_val, m_v2_test)
-
-    tabla_est_v2 = calcular_metricas_por_estacion(df_test, pred_v2_test, target_col, df_stations)
-    figuras_v2 = figuras_p1(df_test, pred_v2_test, target_col, "v2")
-
-    tracker.registrar_run(
-        run_name="P1_v2_rolling_mean",
-        params={
-            **params_base,
-            "modelo": "LinearRegression",
-            "variables_predictoras": ", ".join(P1_FEATURES_V2),
-            "postprocesamiento": "np.clip(predicciones, 0, None)",
-        },
-        tags={**tags_base, "version": "v2"},
-        tabla=pd.DataFrame([m_v2_train, m_v2_val, m_v2_test]),
-        tabla_est=tabla_est_v2,
-        modelo=modelo_v2.estimator_,
-        X_ejemplo=df_train[P1_FEATURES_V2].head(5),
-        figuras=figuras_v2,
-    )
-
-    filas_comparacion.append({
-        "modelo": "v2_lineal_rolling",
-        "train_mae": m_v2_train["MAE"],
-        "train_wape": m_v2_train["WAPE"],
-        "val_wape": m_v2_val["WAPE"],
-        "test_mae": m_v2_test["MAE"],
-        "test_rmse": m_v2_test["RMSE"],
-        "test_wape": m_v2_test["WAPE"],
-        "test_sesgo": m_v2_test["Sesgo"],
-    })
-
-    # -------------------------------------------------------------
+   # -------------------------------------------------------------
     # 4. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
     # -------------------------------------------------------------
     df_p1_comp = pd.DataFrame(filas_comparacion).set_index("modelo")
-    p1_comp_path = REPORTS_DIR / "p1_comparacion.parquet"
-    df_p1_comp.round(3).reset_index().to_parquet(p1_comp_path, index=False)
 
-    logger.info(f"Reporte de entrenamiento P1 guardado en Parquet: {p1_comp_path}")
+    logger.info(f"Resumen de la corrida:")
     logger.info("\n" + df_p1_comp.round(3).to_string())
 
-    preds_out_path = REPORTS_DIR / "p1_predicciones_modelos.parquet"
+    preds_out_path = REPORTS_DIR / f"p1_predicciones_{model}.parquet"
     df_predicciones.to_parquet(preds_out_path, index=False)
-    logger.success(f"Predicciones de los 6 modelos guardadas en {preds_out_path}")
-
+    logger.success(f"Predicciones de los modelos guardadas en {preds_out_path}")
 
 if __name__ == "__main__":
     app()

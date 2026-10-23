@@ -115,6 +115,20 @@ P1_FEATURES_V1 = [
 ]
 P1_FEATURES_V2 = P1_FEATURES_V1 + ["rolling_3h", "rolling_168h"]
 
+P1_LGBM_GRID_POISSON = {
+    "objective": ["poisson"],
+    "learning_rate": [0.05, 0.1],
+    "num_leaves": [63, 127],
+    "n_estimators": [300, 600],
+}
+
+P1_LGBM_GRID_TWEEDIE = {
+    "objective": ["tweedie"],
+    "learning_rate": [0.1],
+    "num_leaves": [127],
+    "n_estimators": [600],
+    "tweedie_variance_power":[1.2,1.5,1.8]
+}
 
 
 # ==========================================

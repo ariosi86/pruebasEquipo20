@@ -11,7 +11,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, RegressorMixin
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, PoissonRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -72,6 +72,38 @@ class DemandaLinealP1(BaseEstimator, RegressorMixin):
         self.pipeline = Pipeline([
             ("scaler", StandardScaler()),
             ("regressor", LinearRegression()),
+        ])
+
+    def fit(self, X: pd.DataFrame, y: Union[pd.Series, np.ndarray]):
+        self.features_ = (
+            list(self.features) if self.features is not None else list(X.columns)
+        )
+        self.pipeline.fit(X[self.features_], y)
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        if not hasattr(self, "features_"):
+            cols = list(self.features) if self.features is not None else list(X.columns)
+        else:
+            cols = self.features_
+
+        pred = self.pipeline.predict(X[cols])
+        return np.clip(pred, 0, None)
+
+class DemandaPoissonP1(BaseEstimator, RegressorMixin):
+    """
+    Modelo de Regresión Poisson para P1 con StandardScaler integrado.
+    Expone el atributo .pipeline con el paso 'scaler' requerido por pytest.
+    """
+
+    def __init__(self, features: Optional[List[str]] = None,
+                alpha: float = 1e-4, max_iter: int = 300):
+        self.features = features
+        self.alpha = alpha
+        self.max_iter = max_iter
+        self.pipeline = Pipeline([
+            ("scaler", StandardScaler()),
+            ("regressor", PoissonRegressor(alpha=self.alpha, max_iter=self.max_iter)),
         ])
 
     def fit(self, X: pd.DataFrame, y: Union[pd.Series, np.ndarray]):
