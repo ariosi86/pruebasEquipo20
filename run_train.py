@@ -62,6 +62,7 @@ VERSIONES_P2 = [
 
 VERSIONES_P3 = [
     ("baseline", "baseline", [], "train_p3"),
+    ("kmeans_search", "kmeans_search", ["n_init=10"], "train_p3"),
     ("kmeans_k3", "kmeans", ["n_clusters=3", "n_init=10"], "train_p3"),
     ("kmeans_k4", "kmeans", ["n_clusters=4", "n_init=10"], "train_p3"),
     ("kmeans_k5", "kmeans", ["n_clusters=5", "n_init=10"], "train_p3"),

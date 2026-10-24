@@ -2,11 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 Script de entrenamiento, evaluación y registro en MLflow para P3 (Segmentación de Estaciones).
-Compara e imprime en consola:
-  - Baseline Geográfico por Municipio
-  - Modelo Candidato: KMeans (K=4) con StandardScaler
+
+Modos (opción --modelo):
+  - baseline:      agrupación geográfica por municipio (línea base).
+  - kmeans:        candidato KMeans con StandardScaler para el n_clusters indicado.
+  - kmeans_search: búsqueda de k de 2 a 8 organizada como nested runs; elige k con
+                   el silhouette de validación y no usa el conjunto de prueba.
+  - ambos:         baseline + kmeans en una sola ejecución.
+
+Partición temporal: entrenamiento 2025, validación enero-abril 2026, prueba mayo-septiembre 2026.
+Métricas: silhouette y Davies-Bouldin por conjunto.
 Exporta métricas en reports/p3_comparacion.parquet y asignaciones en reports/p3_predicciones_modelos.parquet.
-Serializa el modelo oficial en models/p3_kmeans_model.pkl.
+Serializa el modelo KMeans en models/p3_kmeans_model.pkl.
 """
 
 from pathlib import Path
@@ -73,7 +80,7 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_test: dict):
 
 @app.command()
 def main(
-    modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'kmeans' o 'ambos'"),
+    modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'kmeans', 'kmeans_search' o 'ambos'"),
     n_clusters: int = typer.Option(P3_K_ELEGIDO, "--n-clusters", help="Numero de clusters (P3)"),
     n_init: int = typer.Option(10, "--n-init", help="n_init de KMeans (P3)"),
 ):
