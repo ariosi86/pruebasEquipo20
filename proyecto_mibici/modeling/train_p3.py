@@ -160,7 +160,7 @@ def main(
 
         tracker.registrar_run(
             run_name="p3-baseline-municipio",
-            params={**params_base, "modelo": "BaselineMunicipio"},
+            params={**params_base, "algoritmo": "BaselineMunicipio"},
             tags={
                 **tags_base,
                 "version": "baseline_municipio",
@@ -224,7 +224,7 @@ def main(
 
         tracker.registrar_run(
             run_name="p3-kmeans-k4",
-            params={**params_base, "modelo": "KMeans", "n_clusters": n_clusters, "n_init": n_init},
+            params={**params_base, "algoritmo": "KMeans", "n_clusters": n_clusters, "n_init": n_init},
             tags={
                 **tags_base,
                 "version": "v1_kmeans",
