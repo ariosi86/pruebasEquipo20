@@ -366,7 +366,263 @@ Los modelos candidatos registran como tags:
 | Lineal v1| linear | baseline |   |
 | Los 4 ingenuos| naive | baseline |   |
 
+---
 
+## MLflow Project y tracking avanzado
+
+El proyecto está empaquetado como un **MLflow Project** para permitir la reproducción completa de la ingesta y los entrenamientos desde cualquier entorno.
+
+### Archivos del proyecto MLflow
+
+- `MLproject`: Define los entry points `ingest` y `train`, sus parámetros y el entorno Conda.
+- `python_env.yaml`: Entorno Conda con las versiones fijas de dependencias (iguales a `requirements.txt`).
+- `run_train.py`: Wrapper CLI que despacha al módulo de entrenamiento de cada pregunta.
+
+### 1. Levantar el servidor de MLflow
+
+Desde la raíz del repositorio, con el entorno virtual activado:
+
+```bash
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+```
+
+La URI de seguimiento se declara en `MLproject` como `MLFLOW_TRACKING_URI = sqlite:///mlflow.db` y también está en `config.py` (`URI_MLFLOW_TRACKING`). Accede a la interfaz en `http://localhost:5000`.
+
+### 2. Reproducir la ingesta de datos
+
+Descarga los CSVs de MiBici, los normaliza, genera los Parquet procesados y crea `data/manifest.json`:
+
+```bash
+mlflow run . -e ingest
+```
+
+Equivalente a ejecutar `python -m proyecto_mibici.dataset`.
+
+### 3. Entrenar modelos por pregunta
+
+El entry point `train` recibe `pregunta` (`p1`, `p2` o `p3`) y `modelo`, además de hiperparámetros opcionales. Los valores por defecto se toman de `config.py`.
+
+#### P1 — Demanda horaria (regresión)
+
+```bash
+# Baseline: Regresión Lineal con medias móviles
+mlflow run . -e train -P pregunta=p1 -P modelo=baseline
+
+# Candidato: Regresión de Poisson
+mlflow run . -e train -P pregunta=p1 -P modelo=poisson --lr 0.05 --alpha 0.0001 --max-iter 300
+
+# Candidato: LightGBM Poisson (búsqueda anidada)
+mlflow run . -e train -P pregunta=p1 -P modelo=lgbm_p_search
+
+# Candidato: LightGBM Tweedie (búsqueda anidada)
+mlflow run . -e train -P pregunta=p1 -P modelo=lgbm_t_search
+```
+
+#### P2 — Riesgo de desbalance (clasificación)
+
+```bash
+# Línea base: persistencia ingenua
+mlflow run . -e train -P pregunta=p2 -P modelo=baseline
+
+# Candidato: Regresión Logística balanceada
+mlflow run . -e train -P pregunta=p2 -P modelo=logistic --umbral 0.5 --class-weight balanced --max-iter 1000
+
+# Ambos (baseline + candidato)
+mlflow run . -e train -P pregunta=p2 -P modelo=ambos --umbral 0.5
+```
+
+#### P3 — Clustering de estaciones (no supervisado)
+
+```bash
+# Línea base: agrupación por municipio
+mlflow run . -e train -P pregunta=p3 -P modelo=baseline
+
+# Candidato: KMeans funcional
+mlflow run . -e train -P pregunta=p3 -P modelo=kmeans --n-clusters 4 --n-init 10
+
+# Ambos (baseline + candidato)
+mlflow run . -e train -P pregunta=p3 -P modelo=ambos --n-clusters 4 --n-init 10
+```
+
+### 4. Flujo completo recomendado
+
+```bash
+# 1. Levantar MLflow (terminal aparte)
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+
+# 2. Ingesta de datos
+mlflow run . -e ingest
+
+# 3. Entrenar P1, P2 y P3
+mlflow run . -e train -P pregunta=p1 -P modelo=baseline
+mlflow run . -e train -P pregunta=p2 -P modelo=ambos
+mlflow run . -e train -P pregunta=p3 -P modelo=ambos
+```
+
+Cada run queda registrado en MLflow con sus parámetros, métricas, etiquetas (git commit, versión de datos, equipo) y artefactos (modelo con firma, figuras, `manifest.json`).
+
+---
+
+## 9. Orquestador `run_train.py` y selección del mejor modelo (`run_mejor_modelo.py`)
+
+### 9.1 `run_train.py` — Orquestador de entrenamientos (P1/P2/P3)
+
+`run_train.py` es un **atajo CLI (Typer)** para ejecutar todos los entrenamientos de una pregunta en un solo comando, en lugar de lanzar cada `mlflow run` uno a uno manualmente. **No contiene lógica de entrenamiento**: solo despacha cada versión candidata como un proyecto MLflow independiente mediante ``mlflow run . -e train_pX -P ...``.
+
+El entry point de MLflow (`train_p1`, `train_p2`, `train_p3`) invoca **directamente** al módulo de entrenamiento correspondiente (`train_p1.py`, `train_p2.py`, `train_p3.py`), evitando recursión. Cada versión queda registrada como un run independiente en MLflow con sus parámetros, métricas, etiquetas (`question`, `model_family`, `stage_of_work`, `equipo=20`), artefactos del modelo con firma y ejemplo de entrada, manifiesto de datos, `log_input` del conjunto de entrenamiento y figuras de desempeño.
+
+#### Comando Typer
+
+- `train --pregunta <p1|p2|p3> [--versiones <lista>]`: entrena las versiones de la pregunta indicada. `--versiones` acepta `todos` (por defecto) o una lista separada por comas con los nombres de versión a ejecutar.
+
+#### Versiones candidatas por pregunta (hiperparámetros hardcodeados)
+
+Cada pregunta incluye su **línea base** y **al menos tres versiones adicionales** que varían algoritmo, hiperparámetros o features.
+
+**P1 — Demanda horaria (Regresión)**
+
+| Versión | Modelo (`--modelo`) | Hiperparámetros (`-P`) | Entry point |
+|---------|---------------------|------------------------|-------------|
+| `baseline` | `baseline` | (ninguno) | `train_p1` |
+| `poisson` | `poisson` | `lr=0.05`, `alpha=0.0001`, `max_iter=300` | `train_p1` |
+| `lgbm_poisson` | `lgbm_poisson` | (ninguno) | `train_p1` |
+| `lgbm_poisson_search` | `lgbm_p_search` | (ninguno) | `train_p1` |
+| `lgbm_tweedie` | `lgbm_tweedie` | (ninguno) | `train_p1` |
+| `lgbm_tweedie_search` | `lgbm_t_search` | (ninguno) | `train_p1` |
+
+#### Búsquedas con nested runs (P1)
+
+Dos versiones de P1 están organizadas como **búsqueda de hiperparámetros anidada** en MLflow:
+
+| Versión | Modelo | Qué hace | Estructura en MLflow |
+|---------|--------|----------|----------------------|
+| `lgbm_poisson_search` | `lgbm_p_search` | Grid search sobre `P1_LGBM_GRID_POISSON` (objective=poisson, learning_rate, num_leaves, n_estimators). Evalúa cada combinación en Validación y elige el mejor WAPE. | Run padre `P1_lgbm_poisson_search` + runs hijas `search_00`, `search_01`, … (`nested=True`). |
+| `lgbm_tweedie_search` | `lgbm_t_search` | Grid search sobre `P1_LGBM_GRID_TWEEDIE` (objective=tweedie, learning_rate, num_leaves, n_estimators, tweedie_variance_power). | Run padre `P1_lgbm_tweedie_search` + runs hijas `search_00`, `search_01`, … (`nested=True`). |
+
+**Ejecutar una búsqueda anidada:**
+
+```bash
+# Búsqueda Poisson (padre + runs hijas por combinación)
+python run_train.py train --pregunta p1 --versiones lgbm_poisson_search
+
+# Búsqueda Tweedie (padre + runs hijas por combinación)
+python run_train.py train --pregunta p1 --versiones lgbm_tweedie_search
+```
+
+En la interfaz de MLflow (`http://127.0.0.1:5000`) verás el run padre con sus runs hijas anidadas debajo, cada una con sus propios hiperparámetros y métricas de Validación. Esto satisface el criterio de *"al menos una búsqueda organizada como nested runs: una corrida padre por búsqueda y una corrida hija por combinación"*.
+
+**Nota:** las búsquedas anidadas entrenan sobre el mismo conjunto de entrenamiento y partición temporal que el baseline, por lo que la comparación contra el baseline es válida. No se cambiaron particiones ni métricas.
+
+**P2 — Riesgo de desbalance (Clasificación)**
+
+| Versión | Modelo (`--modelo`) | Hiperparámetros (`-P`) | Entry point |
+|---------|---------------------|------------------------|-------------|
+| `baseline` | `baseline` | (ninguno) | `train_p2` |
+| `logistic_balanced` | `logistic` | `umbral=0.5`, `class_weight=balanced`, `max_iter=1000` | `train_p2` |
+| `logistic_sin_peso` | `logistic` | `umbral=0.5`, `class_weight=None`, `max_iter=1000` | `train_p2` |
+| `logistic_umbral_sensible` | `logistic` | `umbral=0.3`, `class_weight=balanced`, `max_iter=1000` | `train_p2` |
+
+**P3 — Clustering de estaciones (No supervisado)**
+
+| Versión | Modelo (`--modelo`) | Hiperparámetros (`-P`) | Entry point |
+|---------|---------------------|------------------------|-------------|
+| `baseline` | `baseline` | (ninguno) | `train_p3` |
+| `kmeans_k3` | `kmeans` | `n_clusters=3`, `n_init=10` | `train_p3` |
+| `kmeans_k4` | `kmeans` | `n_clusters=4`, `n_init=10` | `train_p3` |
+| `kmeans_k5` | `kmeans` | `n_clusters=5`, `n_init=10` | `train_p3` |
+| `kmeans_k6` | `kmeans` | `n_clusters=6`, `n_init=10` | `train_p3` |
+
+#### Ejecución con `run_train.py` (atajo)
+
+```bash
+# Todas las versiones de P1
+python run_train.py train --pregunta p1
+
+# Solo baseline y el mejor candidato de P1
+python run_train.py train --pregunta p1 --versiones baseline,lgbm_tweedie
+
+# Todas las versiones de P2
+python run_train.py train --pregunta p2
+
+# Baseline y el mejor candidato de P2
+python run_train.py train --pregunta p2 --versiones baseline,logistic_sin_peso
+
+# Todas las versiones de P3
+python run_train.py train --pregunta p3
+```
+
+#### Ejecución manual con `mlflow run` (uno a uno)
+
+Cada versión también puede lanzarse individualmente directamente con `mlflow run`, sin pasar por `run_train.py`:
+
+**P1 — Demanda horaria**
+```bash
+mlflow run . -e train_p1 -P modelo=baseline
+mlflow run . -e train_p1 -P modelo=poisson -P lr=0.05 -P alpha=0.0001 -P max_iter=300
+mlflow run . -e train_p1 -P modelo=lgbm_poisson
+mlflow run . -e train_p1 -P modelo=lgbm_p_search
+mlflow run . -e train_p1 -P modelo=lgbm_tweedie
+```
+
+**P2 — Riesgo de desbalance**
+```bash
+mlflow run . -e train_p2 -P modelo=baseline
+mlflow run . -e train_p2 -P modelo=logistic -P umbral=0.5 -P class_weight=balanced -P max_iter=1000
+mlflow run . -e train_p2 -P modelo=logistic -P umbral=0.5 -P class_weight=None -P max_iter=1000
+mlflow run . -e train_p2 -P modelo=logistic -P umbral=0.3 -P class_weight=balanced -P max_iter=1000
+```
+
+**P3 — Clustering de estaciones**
+```bash
+mlflow run . -e train_p3 -P modelo=baseline
+mlflow run . -e train_p3 -P modelo=kmeans -P n_clusters=3 -P n_init=10
+mlflow run . -e train_p3 -P modelo=kmeans -P n_clusters=4 -P n_init=10
+mlflow run . -e train_p3 -P modelo=kmeans -P n_clusters=5 -P n_init=10
+mlflow run . -e train_p3 -P modelo=kmeans -P n_clusters=6 -P n_init=10
+```
+
+#### Requisitos previos
+
+1. Levantar el servidor de MLflow (terminal aparte):
+
+```bash
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+```
+
+2. Tener los datos procesados (`data/processed/`) generados con `python -m proyecto_mibici.dataset` o `mlflow run . -e ingest`.
+
+3. Dependencias instaladas (`pip install -r requirements.txt`, que incluye `lightgbm>=4.7.0`).
+
+### 9.2 `run_mejor_modelo.py` — Registro en el Model Registry
+
+`run_mejor_modelo.py` registra en el MLflow Model Registry el modelo elegido de cada pregunta (según el análisis en `mejor_modelo.md`), con un nombre claro y consistente, conservando su linaje (experimento, corrida de origen, commit y versión de datos) y agregando una descripción a cada modelo registrado.
+
+#### Modelos registrados
+
+| Pregunta | Nombre en el Registry | Modelo elegido |
+|----------|----------------------|----------------|
+| P1 | `mibici-equipo20-p1-demanda` | LightGBM Regresión Tweedie |
+| P2 | `mibici-equipo20-p2-riesgo` | Regresión Logística sin peso, umbral 0.5 |
+| P3 | `mibici-equipo20-p3-grupos` | KMeans funcional K=4 |
+
+Cada versión conserva su linaje: experimento (`mibici-equipo20`), corrida de origen (`run_origen`), commit de Git y versión de datos (`datos_version`). Todas se promueven al alias/stage `Production`.
+
+#### Ejecución
+
+```bash
+python run_mejor_modelo.py
+```
+
+El script es idempotente: si ya existe una versión registrada para la misma corrida de origen, la reusa y actualiza su descripción y tags de linaje en lugar de duplicarla.
+
+#### Verificación
+
+Los modelos quedan accesibles en la interfaz de MLflow (`http://127.0.0.1:5000`, sección Models) y pueden cargarse para inferencia con:
+
+```python
+import mlflow
+modelo = mlflow.pyfunc.load_model("models:/mibici-equipo20-p1-demanda@champion")
+```
 
 
 

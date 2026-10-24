@@ -8,10 +8,16 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+from loguru import logger
+
 import mlflow
 import mlflow.sklearn
 import pandas as pd  
 from mlflow.models import infer_signature
+try:
+    from mlflow.data.pandas_dataset import from_df  # mlflow < 3
+except ImportError:  # mlflow >= 3
+    from mlflow.data.pandas_dataset import from_pandas as from_df
 
 from proyecto_mibici.config import (
     FIGURES_DIR,
@@ -126,13 +132,31 @@ class MLFlowTracker:
         modelo=None,
         X_ejemplo=None,
         figuras: dict = None,
-        serialization_format: str = None, #NUEVO: Added serialization_format parameter
+        serialization_format: str = None,
+        df_train: pd.DataFrame = None,
+        ruta_entrenamiento: str = None,
     ) -> str:
         """Crea un run con parámetros, métricas, modelo, figuras y tabla por estación."""
+        # Etiqueta question automática a partir del parámetro pregunta
+        if "question" not in tags and "pregunta" in params:
+            tags = {**tags, "question": params["pregunta"]}
+
         with mlflow.start_run(run_name=run_name) as run:
             mlflow.log_params({k: str(v) for k, v in params.items()})
             mlflow.log_metrics(self.metricas_a_dict(tabla))
             mlflow.set_tags(tags)
+
+            # Log del dataset de entrenamiento como input (versión de datos)
+            if df_train is not None:
+                try:
+                    training_dataset = from_df(
+                        df_train,
+                        source=ruta_entrenamiento or str(TRIPS_PROCESSED_PATH),
+                        name="train_set",
+                    )
+                    mlflow.log_input(training_dataset, context="training")
+                except Exception as e:
+                    logger.warning(f"No se pudo registrar mlflow.log_input: {e}")
 
             if modelo is not None:
                 signature = None

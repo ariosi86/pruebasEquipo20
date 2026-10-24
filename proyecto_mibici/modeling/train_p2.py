@@ -23,6 +23,7 @@ from proyecto_mibici.config import (
     P2_VARIABLES,
     RANDOM_SEED,
     REPORTS_DIR,
+    TRIPS_TRAIN_PATH,
     URI_MLFLOW_TRACKING,
 )
 from proyecto_mibici.features import construir_dataset_p2
@@ -64,7 +65,12 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_val: dict, m_test: di
 
 
 @app.command()
-def main():
+def main(
+    modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'logistic' o 'ambos'"),
+    umbral: float = typer.Option(P2_UMBRAL, "--umbral", help="Umbral de decisión de riesgo (P2)"),
+    class_weight: str = typer.Option("balanced", "--class-weight", help="Peso de clases para Regresión Logística"),
+    max_iter: int = typer.Option(1000, "--max-iter", help="Iteraciones máximas para Regresión Logística"),
+):
     tracker = MLFlowTracker(
         tracking_uri=URI_MLFLOW_TRACKING,
         experiment_name=MLFLOW_EXPERIMENT_NAME,
@@ -93,7 +99,7 @@ def main():
     params_base, tags_base = tracker.armar_params_tags(
         "P2",
         splits,
-        extra_params={"variable_objetivo": P2_OBJETIVO, "umbral_capacidad": P2_UMBRAL},
+        extra_params={"variable_objetivo": P2_OBJETIVO, "umbral_capacidad": umbral},
         col_tiempo="hora",
     )
 
@@ -105,108 +111,129 @@ def main():
     # -------------------------------------------------------------
     # 1. EVALUACIÓN DE LÍNEA BASE (PERSISTENCIA INGENUA)
     # -------------------------------------------------------------
-    logger.info("--- Evaluando Línea Base Ingenua: Persistencia ---")
-    modelo_naive = BaselinePersistenciaP2(col_persistencia="en_riesgo")
+    if modelo.lower() in ("baseline", "naive", "ambos"):
+        logger.info("--- Evaluando Línea Base Ingenua: Persistencia ---")
+        modelo_naive = BaselinePersistenciaP2(col_persistencia="en_riesgo")
 
-    pred_train_naive = modelo_naive.predict(df_train)
-    prob_train_naive = modelo_naive.predict_proba(df_train)[:, 1]
-    m_naive_train = extraer_metricas_clasificacion(y_train, pred_train_naive, prob_train_naive, "Train")
+        pred_train_naive = modelo_naive.predict(df_train)
+        prob_train_naive = modelo_naive.predict_proba(df_train)[:, 1]
+        m_naive_train = extraer_metricas_clasificacion(y_train, pred_train_naive, prob_train_naive, "Train")
 
-    pred_val_naive = modelo_naive.predict(df_val)
-    prob_val_naive = modelo_naive.predict_proba(df_val)[:, 1]
-    m_naive_val = extraer_metricas_clasificacion(y_val, pred_val_naive, prob_val_naive, "Validación")
+        pred_val_naive = modelo_naive.predict(df_val)
+        prob_val_naive = modelo_naive.predict_proba(df_val)[:, 1]
+        m_naive_val = extraer_metricas_clasificacion(y_val, pred_val_naive, prob_val_naive, "Validación")
 
-    pred_test_naive = modelo_naive.predict(df_test)
-    prob_test_naive = modelo_naive.predict_proba(df_test)[:, 1]
-    m_naive_test = extraer_metricas_clasificacion(y_test, pred_test_naive, prob_test_naive, "Test")
+        pred_test_naive = modelo_naive.predict(df_test)
+        prob_test_naive = modelo_naive.predict_proba(df_test)[:, 1]
+        m_naive_test = extraer_metricas_clasificacion(y_test, pred_test_naive, prob_test_naive, "Test")
 
-    df_predicciones["naive_persistencia"] = pred_test_naive.astype(int)
-    imprimir_metricas_modelo("naive_persistencia", m_naive_train, m_naive_val, m_naive_test)
+        df_predicciones["naive_persistencia"] = pred_test_naive.astype(int)
+        imprimir_metricas_modelo("naive_persistencia", m_naive_train, m_naive_val, m_naive_test)
 
-    tracker.registrar_run(
-        run_name="P2_naive_persistencia",
-        params={
-            **params_base,
-            "modelo": "BaselinePersistenciaP2",
-            "regla": "en_riesgo_t",
-        },
-        tags={**tags_base, "version": "naive_persistencia"},
-        tabla=pd.DataFrame([m_naive_train, m_naive_val, m_naive_test]),
-        tabla_est=pd.DataFrame(),
-    )
+        tracker.registrar_run(
+            run_name="P2_naive_persistencia",
+            params={
+                **params_base,
+                "modelo": "BaselinePersistenciaP2",
+                "regla": "en_riesgo_t",
+            },
+            tags={
+                **tags_base,
+                "version": "naive_persistencia",
+                "question": "P2",
+                "model_family": "naive",
+                "stage_of_work": "baseline",
+            },
+            tabla=pd.DataFrame([m_naive_train, m_naive_val, m_naive_test]),
+            tabla_est=pd.DataFrame(),
+            df_train=df_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
 
-    filas_comparacion.append({
-        "modelo": "naive_persistencia",
-        "train_f1": m_naive_train["f1_score"],
-        "val_f1": m_naive_val["f1_score"],
-        "test_precision": m_naive_test["precision"],
-        "test_recall": m_naive_test["recall"],
-        "test_f1": m_naive_test["f1_score"],
-        "test_pr_auc": m_naive_test["pr_auc"],
-    })
+        filas_comparacion.append({
+            "modelo": "naive_persistencia",
+            "train_f1": m_naive_train["f1_score"],
+            "val_f1": m_naive_val["f1_score"],
+            "test_precision": m_naive_test["precision"],
+            "test_recall": m_naive_test["recall"],
+            "test_f1": m_naive_test["f1_score"],
+            "test_pr_auc": m_naive_test["pr_auc"],
+        })
 
     # -------------------------------------------------------------
     # 2. MODELO CANDIDATO: REGRESIÓN LOGÍSTICA BALANCEADA
     # -------------------------------------------------------------
-    logger.info("--- Entrenando Modelo Candidato: RiesgoLogisticoP2 ---")
-    modelo_p2 = RiesgoLogisticoP2(
-        features=P2_VARIABLES,
-        class_weight="balanced",
-        random_state=RANDOM_SEED,
-        max_iter=1000,
-    )
-    modelo_p2.fit(df_train[P2_VARIABLES], y_train)
+    if modelo.lower() in ("logistic", "logistica", "ambos"):
+        logger.info("--- Entrenando Modelo Candidato: RiesgoLogisticoP2 ---")
+        cw = None if class_weight == "None" else class_weight
+        modelo_p2 = RiesgoLogisticoP2(
+            features=P2_VARIABLES,
+            class_weight=cw,
+            random_state=RANDOM_SEED,
+            max_iter=max_iter,
+            umbral=umbral,
+        )
+        modelo_p2.fit(df_train[P2_VARIABLES], y_train)
 
-    ruta_modelo = MODELS_DIR / "p2_logistic_model.pkl"
-    modelo_p2.save(ruta_modelo)
-    logger.info(f"Modelo P2 guardado exitosamente en {ruta_modelo}")
+        ruta_modelo = MODELS_DIR / "p2_logistic_model.pkl"
+        modelo_p2.save(ruta_modelo)
+        logger.info(f"Modelo P2 guardado exitosamente en {ruta_modelo}")
 
-    pred_train_log = modelo_p2.predict(df_train[P2_VARIABLES])
-    prob_train_log = modelo_p2.predict_proba(df_train[P2_VARIABLES])[:, 1]
-    m_log_train = extraer_metricas_clasificacion(y_train, pred_train_log, prob_train_log, "Train")
+        pred_train_log = modelo_p2.predict(df_train[P2_VARIABLES])
+        prob_train_log = modelo_p2.predict_proba(df_train[P2_VARIABLES])[:, 1]
+        m_log_train = extraer_metricas_clasificacion(y_train, pred_train_log, prob_train_log, "Train")
 
-    pred_val_log = modelo_p2.predict(df_val[P2_VARIABLES])
-    prob_val_log = modelo_p2.predict_proba(df_val[P2_VARIABLES])[:, 1]
-    m_log_val = extraer_metricas_clasificacion(y_val, pred_val_log, prob_val_log, "Validación")
+        pred_val_log = modelo_p2.predict(df_val[P2_VARIABLES])
+        prob_val_log = modelo_p2.predict_proba(df_val[P2_VARIABLES])[:, 1]
+        m_log_val = extraer_metricas_clasificacion(y_val, pred_val_log, prob_val_log, "Validación")
 
-    pred_test_log = modelo_p2.predict(df_test[P2_VARIABLES])
-    prob_test_log = modelo_p2.predict_proba(df_test[P2_VARIABLES])[:, 1]
-    m_log_test = extraer_metricas_clasificacion(y_test, pred_test_log, prob_test_log, "Test")
+        pred_test_log = modelo_p2.predict(df_test[P2_VARIABLES])
+        prob_test_log = modelo_p2.predict_proba(df_test[P2_VARIABLES])[:, 1]
+        m_log_test = extraer_metricas_clasificacion(y_test, pred_test_log, prob_test_log, "Test")
 
-    df_predicciones["prob_riesgo"] = np.round(prob_test_log, 4)
-    df_predicciones["pred_riesgo"] = pred_test_log.astype(int)
+        df_predicciones["prob_riesgo"] = np.round(prob_test_log, 4)
+        df_predicciones["pred_riesgo"] = pred_test_log.astype(int)
 
-    imprimir_metricas_modelo("logistic_regression", m_log_train, m_log_val, m_log_test)
+        imprimir_metricas_modelo("logistic_regression", m_log_train, m_log_val, m_log_test)
 
-    figuras = figuras_p2(y_test, pred_test_log, prob_test_log, "logistic_regression")
-    estimador_log = getattr(modelo_p2, "estimator_", modelo_p2)
+        figuras = figuras_p2(y_test, pred_test_log, prob_test_log, "logistic_regression")
+        estimador_log = getattr(modelo_p2, "estimator_", modelo_p2)
 
-    tracker.registrar_run(
-        run_name="p2-baseline-logistic-regression",
-        params={
-            **params_base,
-            "modelo": "LogisticRegression",
-            "variables_predictoras": ", ".join(P2_VARIABLES),
-            "class_weight": "balanced",
-            "max_iter": 1000,
-        },
-        tags={**tags_base, "version": "v1_logistic"},
-        tabla=pd.DataFrame([m_log_train, m_log_val, m_log_test]),
-        tabla_est=pd.DataFrame(),
-        modelo=estimador_log,
-        X_ejemplo=df_train[P2_VARIABLES].head(5),
-        figuras=figuras,
-    )
+        tracker.registrar_run(
+            run_name="p2-baseline-logistic-regression",
+            params={
+                **params_base,
+                "modelo": "LogisticRegression",
+                "variables_predictoras": ", ".join(P2_VARIABLES),
+                "class_weight": class_weight,
+                "max_iter": max_iter,
+                "umbral": umbral,
+            },
+            tags={
+                **tags_base,
+                "version": "v1_logistic",
+                "question": "P2",
+                "model_family": "logistic_regression",
+                "stage_of_work": "candidate",
+            },
+            tabla=pd.DataFrame([m_log_train, m_log_val, m_log_test]),
+            tabla_est=pd.DataFrame(),
+            modelo=estimador_log,
+            X_ejemplo=df_train[P2_VARIABLES].head(5),
+            figuras=figuras,
+            df_train=df_train[P2_VARIABLES],
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
 
-    filas_comparacion.append({
-        "modelo": "logistic_regression",
-        "train_f1": m_log_train["f1_score"],
-        "val_f1": m_log_val["f1_score"],
-        "test_precision": m_log_test["precision"],
-        "test_recall": m_log_test["recall"],
-        "test_f1": m_log_test["f1_score"],
-        "test_pr_auc": m_log_test["pr_auc"],
-    })
+        filas_comparacion.append({
+            "modelo": "logistic_regression",
+            "train_f1": m_log_train["f1_score"],
+            "val_f1": m_log_val["f1_score"],
+            "test_precision": m_log_test["precision"],
+            "test_recall": m_log_test["recall"],
+            "test_f1": m_log_test["f1_score"],
+            "test_pr_auc": m_log_test["pr_auc"],
+        })
 
     # -------------------------------------------------------------
     # 3. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)

@@ -90,6 +90,16 @@ class DemandaLinealP1(BaseEstimator, RegressorMixin):
         pred = self.pipeline.predict(X[cols])
         return np.clip(pred, 0, None)
 
+    def save(self, filepath: Union[str, Path]) -> None:
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(self, path)
+
+    @classmethod
+    def load(cls, filepath: Union[str, Path]) -> "DemandaLinealP1":
+        return joblib.load(Path(filepath))
+
+
 class DemandaPoissonP1(BaseEstimator, RegressorMixin):
     """
     Modelo de Regresión Poisson para P1 con StandardScaler integrado.

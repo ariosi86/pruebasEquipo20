@@ -32,6 +32,7 @@ from proyecto_mibici.config import (
     REPORTS_DIR,
     STATIONS_PROCESSED_PATH,
     TRIPS_PROCESSED_PATH,
+    TRIPS_TRAIN_PATH,
     URI_MLFLOW_TRACKING,
 )
 from proyecto_mibici.features import construir_perfil_estaciones, limpiar_viajes_p3
@@ -68,7 +69,11 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_test: dict):
 
 
 @app.command()
-def main():
+def main(
+    modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'kmeans' o 'ambos'"),
+    n_clusters: int = typer.Option(P3_K_ELEGIDO, "--n-clusters", help="Numero de clusters (P3)"),
+    n_init: int = typer.Option(10, "--n-init", help="n_init de KMeans (P3)"),
+):
     tracker = MLFlowTracker(
         tracking_uri=URI_MLFLOW_TRACKING,
         experiment_name=MLFLOW_EXPERIMENT_NAME,
@@ -119,7 +124,7 @@ def main():
             "train_fin": P3_TRAIN_FIN,
             "test_inicio": P3_TEST_INICIO,
             "test_fin": P3_TEST_FIN,
-            "k_clusters": P3_K_ELEGIDO,
+            "k_clusters": n_clusters,
             "variables": ", ".join(P3_VARIABLES),
             "min_viajes_estacion": P3_MIN_VIAJES_ESTACION,
             "duracion_max_min": P3_DURACION_MAX_MIN,
@@ -138,93 +143,111 @@ def main():
     # -------------------------------------------------------------
     # 1. EVALUACIÓN DE LÍNEA BASE GEOGRÁFICA (MUNICIPIO)
     # -------------------------------------------------------------
-    logger.info("--- Evaluando Línea Base: Agrupación por Municipio ---")
-    m_base_train = evaluar_metricas_clustering(X_train_eval, etiquetas_mun_train, "Train")
-    m_base_test = evaluar_metricas_clustering(X_test_eval, etiquetas_mun_test, "Test")
+    if modelo.lower() in ("baseline", "municipio", "ambos"):
+        logger.info("--- Evaluando Línea Base: Agrupación por Municipio ---")
+        m_base_train = evaluar_metricas_clustering(X_train_eval, etiquetas_mun_train, "Train")
+        m_base_test = evaluar_metricas_clustering(X_test_eval, etiquetas_mun_test, "Test")
 
-    df_predicciones["baseline_municipio"] = etiquetas_mun_test
-    imprimir_metricas_modelo("baseline_municipio", m_base_train, m_base_test)
+        df_predicciones["baseline_municipio"] = etiquetas_mun_test
+        imprimir_metricas_modelo("baseline_municipio", m_base_train, m_base_test)
 
-    fig_mapa_base = graficar_mapa_grupos(
-        perfil_train,
-        etiquetas_mun_train,
-        df_stations,
-        "Agrupación por Municipio (Línea Base)",
-    )
+        fig_mapa_base = graficar_mapa_grupos(
+            perfil_train,
+            etiquetas_mun_train,
+            df_stations,
+            "Agrupación por Municipio (Línea Base)",
+        )
 
-    tracker.registrar_run(
-        run_name="p3-baseline-municipio",
-        params={**params_base, "modelo": "BaselineMunicipio"},
-        tags={**tags_base, "version": "baseline_municipio"},
-        tabla=pd.DataFrame([m_base_train, m_base_test]),
-        tabla_est=pd.DataFrame(),
-        figuras={"mapa_municipio": fig_mapa_base},
-    )
+        tracker.registrar_run(
+            run_name="p3-baseline-municipio",
+            params={**params_base, "modelo": "BaselineMunicipio"},
+            tags={
+                **tags_base,
+                "version": "baseline_municipio",
+                "question": "P3",
+                "model_family": "baseline_municipio",
+                "stage_of_work": "baseline",
+            },
+            tabla=pd.DataFrame([m_base_train, m_base_test]),
+            tabla_est=pd.DataFrame(),
+            figuras={"mapa_municipio": fig_mapa_base},
+            df_train=perfil_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
 
-    filas_comparacion.append({
-        "modelo": "baseline_municipio",
-        "train_silhouette": m_base_train["silhouette"],
-        "train_davies_bouldin": m_base_train["davies_bouldin"],
-        "test_silhouette": m_base_test["silhouette"],
-        "test_davies_bouldin": m_base_test["davies_bouldin"],
-    })
+        filas_comparacion.append({
+            "modelo": "baseline_municipio",
+            "train_silhouette": m_base_train["silhouette"],
+            "train_davies_bouldin": m_base_train["davies_bouldin"],
+            "test_silhouette": m_base_test["silhouette"],
+            "test_davies_bouldin": m_base_test["davies_bouldin"],
+        })
 
     # -------------------------------------------------------------
-    # 2. MODELO CANDIDATO: K-MEANS FUNCIONAL (K=4)
+    # 2. MODELO CANDIDATO: K-MEANS FUNCIONAL
     # -------------------------------------------------------------
-    logger.info(f"--- Entrenando Modelo Candidato: KMeans (K={P3_K_ELEGIDO}) ---")
-    modelo_kmeans = ClusterKMeansP3(
-        n_clusters=P3_K_ELEGIDO, n_init=10, random_state=RANDOM_SEED
-    )
-    modelo_kmeans.fit(perfil_train[P3_VARIABLES])
+    if modelo.lower() in ("kmeans", "k-means", "ambos"):
+        logger.info(f"--- Entrenando Modelo Candidato: KMeans (K={n_clusters}) ---")
+        modelo_kmeans = ClusterKMeansP3(
+            n_clusters=n_clusters, n_init=n_init, random_state=RANDOM_SEED
+        )
+        modelo_kmeans.fit(perfil_train[P3_VARIABLES])
 
-    ruta_modelo = MODELS_DIR / "p3_kmeans_model.pkl"
-    modelo_kmeans.save(ruta_modelo)
-    modelo_kmeans.save(MODELS_DIR / "p3_kmeans_pipeline.pkl")
-    logger.info(f"Pipeline P3 persistido exitosamente en {ruta_modelo}")
+        ruta_modelo = MODELS_DIR / "p3_kmeans_model.pkl"
+        modelo_kmeans.save(ruta_modelo)
+        modelo_kmeans.save(MODELS_DIR / "p3_kmeans_pipeline.pkl")
+        logger.info(f"Pipeline P3 persistido exitosamente en {ruta_modelo}")
 
-    pred_train_k = modelo_kmeans.labels_
-    pred_test_k = modelo_kmeans.predict(perfil_test[P3_VARIABLES])
+        pred_train_k = modelo_kmeans.labels_
+        pred_test_k = modelo_kmeans.predict(perfil_test[P3_VARIABLES])
 
-    m_k_train = evaluar_metricas_clustering(X_train_eval, pred_train_k, "Train")
-    m_k_test = evaluar_metricas_clustering(X_test_eval, pred_test_k, "Test")
+        m_k_train = evaluar_metricas_clustering(X_train_eval, pred_train_k, "Train")
+        m_k_test = evaluar_metricas_clustering(X_test_eval, pred_test_k, "Test")
 
-    df_predicciones["grupo_kmeans_k4"] = pred_test_k
-    imprimir_metricas_modelo("kmeans_k4", m_k_train, m_k_test)
+        df_predicciones["grupo_kmeans_k4"] = pred_test_k
+        imprimir_metricas_modelo("kmeans_k4", m_k_train, m_k_test)
 
-    # Resumen descriptivo de los clusters
-    perfil_grupos = perfil_train[P3_VARIABLES].assign(grupo=pred_train_k)
-    resumen_grupos = perfil_grupos.groupby("grupo").mean().round(2)
-    resumen_grupos["n_estaciones"] = perfil_grupos["grupo"].value_counts()
+        # Resumen descriptivo de los clusters
+        perfil_grupos = perfil_train[P3_VARIABLES].assign(grupo=pred_train_k)
+        resumen_grupos = perfil_grupos.groupby("grupo").mean().round(2)
+        resumen_grupos["n_estaciones"] = perfil_grupos["grupo"].value_counts()
 
-    # Mapa de clústeres
-    fig_mapa_kmeans = graficar_mapa_grupos(
-        perfil_train,
-        pred_train_k,
-        df_stations,
-        f"Grupos de Estaciones MiBici (KMeans K={P3_K_ELEGIDO})",
-    )
+        # Mapa de clústeres
+        fig_mapa_kmeans = graficar_mapa_grupos(
+            perfil_train,
+            pred_train_k,
+            df_stations,
+            f"Grupos de Estaciones MiBici (KMeans K={n_clusters})",
+        )
 
-    estimador_pipeline = getattr(modelo_kmeans, "pipeline_", getattr(modelo_kmeans, "pipeline", None))
+        estimador_pipeline = getattr(modelo_kmeans, "pipeline_", getattr(modelo_kmeans, "pipeline", None))
 
-    tracker.registrar_run(
-        run_name="p3-kmeans-k4",
-        params={**params_base, "modelo": "KMeans", "n_clusters": P3_K_ELEGIDO, "n_init": 10},
-        tags={**tags_base, "version": "v1_kmeans"},
-        tabla=pd.DataFrame([m_k_train, m_k_test]),
-        tabla_est=resumen_grupos.reset_index(),
-        modelo=estimador_pipeline,
-        X_ejemplo=perfil_train[P3_VARIABLES].head(5),
-        figuras={"mapa_kmeans_k4": fig_mapa_kmeans},
-    )
+        tracker.registrar_run(
+            run_name="p3-kmeans-k4",
+            params={**params_base, "modelo": "KMeans", "n_clusters": n_clusters, "n_init": n_init},
+            tags={
+                **tags_base,
+                "version": "v1_kmeans",
+                "question": "P3",
+                "model_family": "kmeans",
+                "stage_of_work": "candidate",
+            },
+            tabla=pd.DataFrame([m_k_train, m_k_test]),
+            tabla_est=resumen_grupos.reset_index(),
+            modelo=estimador_pipeline,
+            X_ejemplo=perfil_train[P3_VARIABLES].head(5),
+            figuras={"mapa_kmeans_k4": fig_mapa_kmeans},
+            df_train=perfil_train[P3_VARIABLES],
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
 
-    filas_comparacion.append({
-        "modelo": "kmeans_k4",
-        "train_silhouette": m_k_train["silhouette"],
-        "train_davies_bouldin": m_k_train["davies_bouldin"],
-        "test_silhouette": m_k_test["silhouette"],
-        "test_davies_bouldin": m_k_test["davies_bouldin"],
-    })
+        filas_comparacion.append({
+            "modelo": "kmeans_k4",
+            "train_silhouette": m_k_train["silhouette"],
+            "train_davies_bouldin": m_k_train["davies_bouldin"],
+            "test_silhouette": m_k_test["silhouette"],
+            "test_davies_bouldin": m_k_test["davies_bouldin"],
+        })
 
     # -------------------------------------------------------------
     # 3. GUARDAR Y MOSTRAR TABLA COMPARATIVA (SOLO PARQUET)
