@@ -115,7 +115,7 @@ def train(
 
 @app.command(name="exec-single", help="Ejecuta una sola versión (usado por MLproject train).")
 def exec_single(
-    pregunta: str = typer.Argument(..., help="p1, p2 o p3"),
+    pregunta: str = typer.Option(..., "--pregunta", help="p1, p2 o p3"),
     modelo: str = typer.Option("baseline", help="Nombre del modelo a entrenar."),
     lr: float = typer.Option(0.05, help="Tasa de aprendizaje (P1)."),
     alpha: float = typer.Option(0.0001, help="Regularización (P1 Poisson)."),
