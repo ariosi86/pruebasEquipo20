@@ -58,6 +58,7 @@ VERSIONES_P2 = [
     ("logistic_balanced", "logistic", [f"umbral={P2_UMBRAL}", "class_weight=balanced", "max_iter=1000"], "train_p2"),
     ("logistic_sin_peso", "logistic", [f"umbral={P2_UMBRAL}", "class_weight=None", "max_iter=1000"], "train_p2"),
     ("logistic_umbral_sensible", "logistic", ["umbral=0.3", "class_weight=balanced", "max_iter=1000"], "train_p2"),
+    ("logistic_search", "logistic_search", [], "train_p2"),
 ]
 
 VERSIONES_P3 = [
@@ -66,6 +67,7 @@ VERSIONES_P3 = [
     ("kmeans_k4", "kmeans", ["n_clusters=4", "n_init=10"], "train_p3"),
     ("kmeans_k5", "kmeans", ["n_clusters=5", "n_init=10"], "train_p3"),
     ("kmeans_k6", "kmeans", ["n_clusters=6", "n_init=10"], "train_p3"),
+    ("kmeans_search", "kmeans_search", [], "train_p3"),
 ]
 
 

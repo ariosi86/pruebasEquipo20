@@ -182,3 +182,17 @@ P3_VARIABLES = [
 P3_K_ELEGIDO = 4
 P3_MIN_VIAJES_ESTACION = 100
 P3_DURACION_MAX_MIN = 180
+
+# ==========================================
+# GRIDS DE HIPERPARÁMETROS PARA BÚSQUEDA ANIDADA
+# ==========================================
+P2_GRID_LOGISTIC = {
+    "C": [0.01, 0.1, 1.0, 10.0],
+    "max_iter": [500, 1000],
+    "class_weight": [None, "balanced"],
+}
+
+P3_GRID_KMEANS = {
+    "n_clusters": [3, 4, 5, 6],
+    "n_init": [10],
+}
