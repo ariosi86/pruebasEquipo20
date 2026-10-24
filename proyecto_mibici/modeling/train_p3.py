@@ -27,6 +27,8 @@ from proyecto_mibici.config import (
     P3_TEST_INICIO,
     P3_TRAIN_FIN,
     P3_TRAIN_INICIO,
+    P3_VAL_FIN,
+    P3_VAL_INICIO,
     P3_VARIABLES,
     RANDOM_SEED,
     REPORTS_DIR,
@@ -89,9 +91,10 @@ def main(
     # Filtrar particiones temporales
     mask_tr = (df_clean["inicio_del_viaje"] >= P3_TRAIN_INICIO) & (df_clean["inicio_del_viaje"] < P3_TRAIN_FIN)
     mask_ts = (df_clean["inicio_del_viaje"] >= P3_TEST_INICIO) & (df_clean["inicio_del_viaje"] < P3_TEST_FIN)
-
+    mask_val = (df_clean["inicio_del_viaje"] >= P3_VAL_INICIO) & (df_clean["inicio_del_viaje"] < P3_VAL_FIN)
     perfil_train = construir_perfil_estaciones(df_clean[mask_tr], min_viajes=P3_MIN_VIAJES_ESTACION)
     perfil_test = construir_perfil_estaciones(df_clean[mask_ts], min_viajes=P3_MIN_VIAJES_ESTACION)
+    perfil_val = construir_perfil_estaciones(df_clean[mask_val], min_viajes=P3_MIN_VIAJES_ESTACION)
 
     logger.info(f"Estaciones con perfil válido -> Train: {len(perfil_train)} | Test: {len(perfil_test)}")
 
@@ -102,11 +105,13 @@ def main(
     scaler_eval = StandardScaler()
     X_train_eval = scaler_eval.fit_transform(perfil_train[P3_VARIABLES])
     X_test_eval = scaler_eval.transform(perfil_test[P3_VARIABLES])
+    X_val_eval = scaler_eval.transform(perfil_val[P3_VARIABLES])
 
     # Etiquetas del baseline por municipio
     municipio_serie = df_stations.set_index("id")["municipality_code"]
     etiquetas_mun_train = municipio_serie.reindex(perfil_train.index).astype("category").cat.codes.to_numpy()
     etiquetas_mun_test = municipio_serie.reindex(perfil_test.index).astype("category").cat.codes.to_numpy()
+    etiquetas_mun_val = municipio_serie.reindex(perfil_val.index).astype("category").cat.codes.to_numpy()
 
     # Añadir columna temporal de referencia para tracking
     perfil_train_tracking = perfil_train.copy()
@@ -122,6 +127,8 @@ def main(
         extra_params={
             "train_inicio": P3_TRAIN_INICIO,
             "train_fin": P3_TRAIN_FIN,
+            "validation_inicio": P3_VAL_INICIO,
+            "validation_fin": P3_VAL_FIN,
             "test_inicio": P3_TEST_INICIO,
             "test_fin": P3_TEST_FIN,
             "k_clusters": n_clusters,
@@ -147,6 +154,7 @@ def main(
         logger.info("--- Evaluando Línea Base: Agrupación por Municipio ---")
         m_base_train = evaluar_metricas_clustering(X_train_eval, etiquetas_mun_train, "Train")
         m_base_test = evaluar_metricas_clustering(X_test_eval, etiquetas_mun_test, "Test")
+        m_base_val = evaluar_metricas_clustering(X_val_eval, etiquetas_mun_val, "Validación")
 
         df_predicciones["baseline_municipio"] = etiquetas_mun_test
         imprimir_metricas_modelo("baseline_municipio", m_base_train, m_base_test)
@@ -168,7 +176,7 @@ def main(
                 "model_family": "baseline_municipio",
                 "stage_of_work": "baseline",
             },
-            tabla=pd.DataFrame([m_base_train, m_base_test]),
+            tabla=pd.DataFrame([m_base_train, m_base_val, m_base_test]),
             tabla_est=pd.DataFrame(),
             figuras={"mapa_municipio": fig_mapa_base},
             df_train=perfil_train,
@@ -201,9 +209,11 @@ def main(
 
         pred_train_k = modelo_kmeans.labels_
         pred_test_k = modelo_kmeans.predict(perfil_test[P3_VARIABLES])
+        pred_val_k = modelo_kmeans.predict(perfil_val[P3_VARIABLES])
 
         m_k_train = evaluar_metricas_clustering(X_train_eval, pred_train_k, "Train")
         m_k_test = evaluar_metricas_clustering(X_test_eval, pred_test_k, "Test")
+        m_k_val = evaluar_metricas_clustering(X_val_eval, pred_val_k, "Validación")
 
         df_predicciones[f"grupo_{etiqueta}"] = pred_test_k
         imprimir_metricas_modelo(etiqueta, m_k_train, m_k_test)
@@ -233,7 +243,7 @@ def main(
                 "model_family": "kmeans",
                 "stage_of_work": "candidate",
             },
-            tabla=pd.DataFrame([m_k_train, m_k_test]),
+            tabla=pd.DataFrame([m_k_train, m_k_val, m_k_test]),
             tabla_est=resumen_grupos.reset_index(),
             modelo=estimador_pipeline,
             X_ejemplo=perfil_train[P3_VARIABLES].head(5),
