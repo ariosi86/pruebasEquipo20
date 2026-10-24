@@ -1,4 +1,3 @@
-name: mibici-env
 channels:
   - conda-forge
   - defaults

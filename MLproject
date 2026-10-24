@@ -106,7 +106,6 @@ entry_points:
     command: "python run_train.py exec-single --pregunta {pregunta} --modelo {modelo} --lr {lr} --alpha {alpha} --max-iter {max_iter} --umbral {umbral} --class-weight {class_weight} --n-clusters {n_clusters} --n-init {n_init}"
 
 environment:
-  name: mibici-env
   conda: python_env.yaml
 
 variables:
