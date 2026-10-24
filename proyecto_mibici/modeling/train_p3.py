@@ -188,6 +188,7 @@ def main(
     # -------------------------------------------------------------
     if modelo.lower() in ("kmeans", "k-means", "ambos"):
         logger.info(f"--- Entrenando Modelo Candidato: KMeans (K={n_clusters}) ---")
+        etiqueta = f"kmeans_k{n_clusters}"
         modelo_kmeans = ClusterKMeansP3(
             n_clusters=n_clusters, n_init=n_init, random_state=RANDOM_SEED
         )
@@ -204,8 +205,8 @@ def main(
         m_k_train = evaluar_metricas_clustering(X_train_eval, pred_train_k, "Train")
         m_k_test = evaluar_metricas_clustering(X_test_eval, pred_test_k, "Test")
 
-        df_predicciones["grupo_kmeans_k4"] = pred_test_k
-        imprimir_metricas_modelo("kmeans_k4", m_k_train, m_k_test)
+        df_predicciones[f"grupo_{etiqueta}"] = pred_test_k
+        imprimir_metricas_modelo(etiqueta, m_k_train, m_k_test)
 
         # Resumen descriptivo de los clusters
         perfil_grupos = perfil_train[P3_VARIABLES].assign(grupo=pred_train_k)
@@ -223,7 +224,7 @@ def main(
         estimador_pipeline = getattr(modelo_kmeans, "pipeline_", getattr(modelo_kmeans, "pipeline", None))
 
         tracker.registrar_run(
-            run_name="p3-kmeans-k4",
+            run_name=f"p3-kmeans-k{n_clusters}",
             params={**params_base, "algoritmo": "KMeans", "n_clusters": n_clusters, "n_init": n_init},
             tags={
                 **tags_base,
@@ -236,13 +237,13 @@ def main(
             tabla_est=resumen_grupos.reset_index(),
             modelo=estimador_pipeline,
             X_ejemplo=perfil_train[P3_VARIABLES].head(5),
-            figuras={"mapa_kmeans_k4": fig_mapa_kmeans},
+            figuras={f"mapa_{etiqueta}": fig_mapa_kmeans},
             df_train=perfil_train[P3_VARIABLES],
             ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
         )
 
         filas_comparacion.append({
-            "modelo": "kmeans_k4",
+            "modelo": etiqueta,
             "train_silhouette": m_k_train["silhouette"],
             "train_davies_bouldin": m_k_train["davies_bouldin"],
             "test_silhouette": m_k_test["silhouette"],
