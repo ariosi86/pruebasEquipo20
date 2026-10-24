@@ -435,14 +435,18 @@ mlflow run . -e train -P pregunta=p2 -P modelo=ambos --umbral 0.5
 
 ```bash
 # Línea base: agrupación por municipio
-mlflow run . -e train -P pregunta=p3 -P modelo=baseline
+mlflow run . -e train -P pregunta=P3 -P modelo=baseline --env-manager local
 
-# Candidato: KMeans funcional
-mlflow run . -e train -P pregunta=p3 -P modelo=kmeans --n-clusters 4 --n-init 10
+# Búsqueda de k (2 a 8) con nested runs; selección por silhouette en validación
+mlflow run . -e train -P pregunta=P3 -P modelo=kmeans_search -P n_init=10 --env-manager local
 
-# Ambos (baseline + candidato)
-mlflow run . -e train -P pregunta=p3 -P modelo=ambos --n-clusters 4 --n-init 10
+# Candidatas KMeans
+mlflow run . -e train -P pregunta=P3 -P modelo=kmeans -P n_clusters=3 -P n_init=10 --env-manager local
+mlflow run . -e train -P pregunta=P3 -P modelo=kmeans -P n_clusters=4 -P n_init=10 --env-manager local
+mlflow run . -e train -P pregunta=P3 -P modelo=kmeans -P n_clusters=5 -P n_init=10 --env-manager local
+mlflow run . -e train -P pregunta=P3 -P modelo=kmeans -P n_clusters=6 -P n_init=10 --env-manager local
 ```
+Antes de correr, en la misma terminal: `export MLFLOW_TRACKING_URI=http://127.0.0.1:5000` y `export MLFLOW_EXPERIMENT_NAME=mibici-equipo20`. La pregunta va en mayúscula (`P3`) para que coincida con el parámetro que registra `tracking.py`.
 
 ### 4. Flujo completo recomendado
 
@@ -527,6 +531,7 @@ En la interfaz de MLflow (`http://127.0.0.1:5000`) verás el run padre con sus r
 | Versión | Modelo (`--modelo`) | Hiperparámetros (`-P`) | Entry point |
 |---------|---------------------|------------------------|-------------|
 | `baseline` | `baseline` | (ninguno) | `train_p3` |
+| `kmeans_search` | `kmeans_search` | `n_init=10` | `train_p3` |
 | `kmeans_k3` | `kmeans` | `n_clusters=3`, `n_init=10` | `train_p3` |
 | `kmeans_k4` | `kmeans` | `n_clusters=4`, `n_init=10` | `train_p3` |
 | `kmeans_k5` | `kmeans` | `n_clusters=5`, `n_init=10` | `train_p3` |
