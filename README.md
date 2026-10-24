@@ -346,8 +346,6 @@ Se genero de manera única de probar los modelos y que todo el proyecto funcione
 | LightGBM-Poisson (nested search)| `lgbm_p_search`  | Búsqueda anidada para encontrar al mejor candidato. |
 | LightGBM-Tweedie (candidato)  | `lgbm_tweedie`  | Búsqueda anidada para encontrar al mejor candidato. |
 | LightGBM-Tweedie (nested_search)  | `lgbm_t_search`  | Candidato 3. Entrenado con los parámetros obtenidos como mejor resultado del nested search |
-| Lineal v1 | `v1_lineal`  | Modelo utliizado para seleccionar baseline.|
-| Los 4 ingenuos | `ingenuos`  | Modelos utliizados para seleccionar baseline.|
 
 Acepta también en el CLI:
 
@@ -363,9 +361,15 @@ Los modelos candidatos registran como tags:
 | lgbm_p_search| search | lightgbm | |
 | lgbm_tweedie| candidato | lightgbm |  |
 | lgbm_t_search| search | lightgbm |   |
-| Lineal v1| linear | baseline |   |
-| Los 4 ingenuos| naive | baseline |   |
 
+Si se está trabajando en **macOS**, la librería `lightgbm` requiere la biblioteca de OpenMP para poder ejecutarse correctamente con soporte multihilo. 
+
+#### Instalar OpenMP (Solo para macOS)
+Asegurarse de tener instalado [Homebrew](https://brew.sh/) y ejecutar el siguiente comando en la terminal:
+
+```bash
+brew install libomp
+rew install libomp
 ---
 
 ## MLflow Project y tracking avanzado
