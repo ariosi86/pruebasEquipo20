@@ -12,6 +12,7 @@ Serializa el modelo oficial en models/p3_kmeans_model.pkl.
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import mlflow
 import typer
 from loguru import logger
 from sklearn.metrics import davies_bouldin_score, silhouette_score
@@ -147,6 +148,38 @@ def main(
         if col in perfil_test.columns:
             df_predicciones[col] = perfil_test[col].values
 
+    # -------------------------------------------------------------
+    # 0. BÚSQUEDA DE K CON NESTED RUNS (selección en validación)
+    # -------------------------------------------------------------
+    if modelo.lower() == "kmeans_search":
+        logger.info("--- Búsqueda de K (2 a 8) con nested runs ---")
+        tags_busqueda = {**tags_base, "question": "P3", "model_family": "kmeans", "stage_of_work": "search"}
+        resultados = []
+
+        with mlflow.start_run(run_name="p3-kmeans-search"):
+            mlflow.log_params({k: str(v) for k, v in params_base.items()})
+            mlflow.log_params({"algoritmo": "KMeans", "k_rango": "2-8", "criterio": "validation_silhouette"})
+            mlflow.set_tags(tags_busqueda)
+
+            for k in range(2, 9):
+                with mlflow.start_run(run_name=f"p3-search-k{k}", nested=True):
+                    modelo_k = ClusterKMeansP3(n_clusters=k, n_init=n_init, random_state=RANDOM_SEED)
+                    modelo_k.fit(perfil_train[P3_VARIABLES])
+                    m_tr = evaluar_metricas_clustering(X_train_eval, modelo_k.labels_, "Train")
+                    pred_va = modelo_k.predict(perfil_val[P3_VARIABLES])
+                    m_va = evaluar_metricas_clustering(X_val_eval, pred_va, "Validación")
+
+                    mlflow.log_params({"n_clusters": k, "n_init": n_init})
+                    mlflow.log_metrics(tracker.metricas_a_dict(pd.DataFrame([m_tr, m_va])))
+                    mlflow.set_tags(tags_busqueda)
+                    resultados.append({"k": k, "validation_silhouette": m_va["silhouette"]})
+
+            mejor = max(resultados, key=lambda r: r["validation_silhouette"])
+            mlflow.log_param("mejor_k", mejor["k"])
+            mlflow.log_metric("mejor_validation_silhouette", mejor["validation_silhouette"])
+            logger.success(f"Mejor K en validación: {mejor['k']} (silhouette {mejor['validation_silhouette']:.3f})")
+        return
+    
     # -------------------------------------------------------------
     # 1. EVALUACIÓN DE LÍNEA BASE GEOGRÁFICA (MUNICIPIO)
     # -------------------------------------------------------------
