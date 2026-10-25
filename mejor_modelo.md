@@ -14,7 +14,7 @@ Este documento resume la comparación de modelos ejecutada con `run_train.py` (t
 
 | Pregunta | Modelo elegido | Nombre en Model Registry | Métrica de decisión (Test) | Baseline (Test) | Mejora vs. baseline |
 |----------|----------------|--------------------------|----------------------------|-----------------|---------------------|
-| P1 | LightGBM Tweedie (`lgbm_tweedie`, alias `champion`); challenger: LightGBM Poisson | `mibici-equipo20-p1-demanda` | Val MAE **0.818** (criterio) · Test MAE 0.790 (reportado) | 0.853 (lineal + rolling) | −7.4 % MAE / −8.7 % RMSE |
+| P1 | LightGBM Tweedie (champion; mejor modelo de la búsqueda anidada). Challenger por comparación: LightGBM Poisson (no registrado) | `mibici-equipo20-p1-demanda` | Val MAE **0.816** (criterio) · Test MAE 0.789 (reportado) | 0.853 (lineal + rolling) | −7.5 % MAE / −8.8 % RMSE |
 | P2 | Regresión Logística sin peso de clases, umbral 0.5 (`logistic_sin_peso`) | `mibici-equipo20-p2-riesgo` | Test F1 **0.832** / PR-AUC **0.806** | F1 ~0.79 (logístico balanceado) | +5 pts F1 / +0.7 pts PR-AUC |
 | P3 | KMeans funcional con K=4 | `mibici-equipo20-p3-grupos` | Test Silhouette **0.182** / DB **1.535** | Silhouette 0.019 / DB 3.71 (municipio) | +0.163 Silhouette / −2.18 DB |
 
@@ -26,14 +26,14 @@ Este documento resume la comparación de modelos ejecutada con `run_train.py` (t
 
 Se selecciona por menor **MAE de validación**; la prueba se reporta una sola vez.
 WAPE, RMSE y sesgo son complementarias. Sesgo = media(pred − real).
+Métrica de negocio: subestimar la demanda deja estaciones sin bicicletas; sobreestimarla genera rebalanceos innecesarios.
 
 | Modelo | Hiperparámetros clave | Val MAE | Val WAPE | Test MAE | Test RMSE | Test WAPE | Test sesgo | Mejora MAE test |
 |---|---|---|---|---|---|---|---|---|
 | Baseline (lineal + rolling, v2) | StandardScaler + LinearRegression, features V2 | 0.885 | 0.663 | 0.853 | 1.545 | 0.681 | +0.004 | referencia |
 | Regresión de Poisson | PoissonRegressor(alpha=1e-4, max_iter=300) | 1.165 | 0.872 | 1.181 | 4.341 | 0.943 | +0.137 | −38.5 % |
 | LightGBM Poisson (challenger) | objective=poisson, lr=0.1, num_leaves=127, n_estimators=600 | 0.819 | 0.614 | 0.792 | 1.422 | 0.632 | −0.018 | +7.2 % |
-| LightGBM Tweedie (champion) | objective=tweedie, power=1.5, lr=0.1, num_leaves=127, n_estimators=600 | 0.818 | 0.612 | 0.790 | 1.410 | 0.631 | −0.023 | +7.4 % |
-
+| LightGBM Tweedie (champion) | objective=tweedie, power=1.8, lr=0.1, num_leaves=127, n_estimators=600 | 0.816 | 0.611 | 0.789 | 1.409 | 0.630 | −0.027 | +7.5 % |
 
 ### 3.2 P2 — Riesgo de desbalance (Clasificación)
 
@@ -63,11 +63,11 @@ Métrica de negocio: identificar grupos funcionales de estaciones para planeaci�
 ## 4. Análisis de la comparación y justificación del modelo elegido
 
 ### P1 → LightGBM Tweedie (champion)
-- **Regla:** menor MAE de validación (0.818 vs 0.819). Empate práctico; Poisson es challenger por menor sesgo (−1.4 % vs −1.9 %).
-- **Desempeño:** MAE de prueba −7.4 % y RMSE −8.7 % frente al baseline.
-- **Sesgo:** ambos subestiman levemente; el Poisson lineal sobreestima +11 %.
-- **Estabilidad:** mejora en validación (7.6 %) y prueba (7.4 %) casi idéntica; repetición con misma semilla reproduce las métricas.
-- **Costo:** ~5 s por corrida completa, comparable al baseline.
+- **Regla:** menor MAE de validación (0.816 vs 0.819 de Poisson). Empate práctico; Poisson queda como challenger por menor sesgo (−1.4 % vs −2.1 %) y un hiperparámetro menos.
+- **Desempeño:** MAE de prueba −7.5 % y RMSE −8.8 % frente al baseline.
+- **Sesgo:** ambos subestiman levemente y de forma estable entre validación y prueba; Tweedie subestima más que Poisson (≈300 vs ≈200 viajes diarios en la red). El Poisson lineal sobreestima +11 %.
+- **Estabilidad:** mejora en validación (7.7 %) y prueba (7.5 %) casi idéntica; el MAE es estable entre entrenamiento, validación y prueba (0.820, 0.816, 0.789).
+- **Costo:** 17.7s por corrida completa, comparable al baseline (14.3s).
 
 ### P2 — Riesgo de desbalance → **Regresión Logística sin peso, umbral 0.5**
 - **Desempeño vs. baseline:** Sin peso de clases alcanza Test F1 0.832 y PR-AUC 0.806, superando al logístico balanceado (F1 0.794, PR-AUC 0.799) y al umbral sensible 0.3 (F1 0.706, que sacrifica demasiada precisión: 0.589).
