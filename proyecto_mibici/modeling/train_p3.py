@@ -167,8 +167,12 @@ def main(
         resultados = []
 
         with mlflow.start_run(run_name="p3-kmeans-search"):
-            mlflow.log_params({k: str(v) for k, v in params_base.items()})
-            mlflow.log_params({"algoritmo": "KMeans", "k_rango": f"{min(valores_k)}-{max(valores_k)}", "criterio": "validation_silhouette"})
+            tracker.log_params_nuevos({
+                **params_base,
+                "algoritmo": "KMeans",
+                "k_rango": f"{min(valores_k)}-{max(valores_k)}",
+                "criterio": "validation_silhouette",
+            })
             mlflow.set_tags(tags_busqueda)
 
             for k in valores_k:

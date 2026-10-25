@@ -102,6 +102,20 @@ class MLFlowTracker:
                     continue
         return metricas
 
+    @staticmethod
+    def log_params_nuevos(params: dict) -> None:
+        """Registra en la corrida activa solo los parámetros que todavía no tiene.
+
+        Con mlflow run, MLflow registra los -P (modelo, pregunta, n_clusters, etc.) antes
+        de ejecutar el script, y no permite cambiar el valor de un parámetro ya registrado.
+        En una corrida nueva (por ejemplo, la hija de una búsqueda) se registran todos.
+        """
+        run_id = mlflow.active_run().info.run_id
+        ya_registrados = mlflow.get_run(run_id).data.params
+        nuevos = {k: str(v) for k, v in params.items() if k not in ya_registrados}
+        if nuevos:
+            mlflow.log_params(nuevos)
+
     def armar_params_tags(
         self,
         pregunta: str,
@@ -154,17 +168,6 @@ class MLFlowTracker:
         if "question" not in tags and "pregunta" in params:
             tags = {**tags, "question": params["pregunta"]}
 
-        # Params que MLflow Projects ya registró vía -P; no se pueden volver a setear
-        MLFLOW_PROJECT_PARAMS = {
-            "modelo", "lr", "alpha", "umbral",
-            "class_weight", "max_iter", "n_clusters", "n_init",
-        }
-
-        # Params filtrados (sin los que MLflow Projects ya registró)
-        params_filtered = {
-            k: v for k, v in params.items() if k not in MLFLOW_PROJECT_PARAMS
-        }
-
         # Asegurar que usamos el experimento correcto
         mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
 
@@ -175,7 +178,7 @@ class MLFlowTracker:
             pass
 
         with mlflow.start_run(run_name=run_name) as run:
-            mlflow.log_params({k: str(v) for k, v in params_filtered.items()})
+            self.log_params_nuevos(params)
             mlflow.log_metrics(self.metricas_a_dict(tabla))
             mlflow.set_tags(tags)
 
