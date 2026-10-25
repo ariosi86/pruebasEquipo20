@@ -115,6 +115,13 @@ P1_FEATURES_V1 = [
 ]
 P1_FEATURES_V2 = P1_FEATURES_V1 + ["rolling_3h", "rolling_168h"]
 
+ESTRATEGIAS_BASELINE_P1 = [
+    "persistencia",
+    "lag_24h",
+    "lag_168h",
+    "promedio_24h_168h",
+]
+
 P1_LGBM_GRID_POISSON = {
     "objective": ["poisson"],
     "learning_rate": [0.05, 0.1],

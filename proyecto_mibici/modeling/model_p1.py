@@ -15,6 +15,8 @@ from sklearn.linear_model import LinearRegression, PoissonRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from proyecto_mibici.config import ESTRATEGIAS_BASELINE_P1
+
 
 class BaselineIngenuoP1(BaseEstimator, RegressorMixin):
     """
@@ -27,15 +29,11 @@ class BaselineIngenuoP1(BaseEstimator, RegressorMixin):
     """
 
     def __init__(self, estrategia: str = "persistencia"):
-        estrategias_validas = [
-            "persistencia",
-            "lag_24h",
-            "lag_168h",
-            "promedio_24h_168h",
-        ]
-        if estrategia not in estrategias_validas:
+        self.estrategia = estrategia
+
+        if self.estrategia not in ESTRATEGIAS_BASELINE_P1:
             raise ValueError(
-                f"Estrategia '{estrategia}' no válida. Opciones: {estrategias_validas}"
+                f"Estrategia '{estrategia}' no válida. Opciones: {ESTRATEGIAS_BASELINE_P1}"
             )
         self.estrategia = estrategia
 
