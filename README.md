@@ -370,6 +370,7 @@ Asegurarse de tener instalado [Homebrew](https://brew.sh/) y ejecutar el siguien
 ```bash
 brew install libomp
 rew install libomp
+```
 ---
 
 ## MLflow Project y tracking avanzado
