@@ -122,7 +122,7 @@ def registrar_fila_comparacion(filas_comparacion, nombre_modelo, m_train, m_val,
 
 @app.command()
 def main(
-    model: str = typer.Option("baseline", "--model", "-m", help="Modelo a entrenar: 'baseline', 'poisson', 'lgbm_poisson', 'lgbm_search' , 'ingenuos', 'v1_lineal'."),
+    model: str = typer.Option("baseline", "--model", "-m", help="Modelo a entrenar: 'baseline', 'poisson', 'lgbm_poisson', 'lgbm_search'"),
     learning_rate: float = typer.Option(0.05, "--lr", help="Tasa de aprendizaje para Poisson o LightGBM."),
     alpha: float = typer.Option(0.0001, "--alpha", help='Tasa de penalización para Poisson'),
     max_iter: int = typer.Option(300, "--max_iter", help="Max iterations para Poisson"),
@@ -448,95 +448,6 @@ def main(
                          "tweedie_variance_power": 1.5,
                          "learning_rate": 0.1, "num_leaves": 127, "n_estimators": 600},
                         nombre="lgbm_tweedie")
-
-    # -------------------------------------------------------------
-    # EVALUACIÓN Y REGISTRO DE 4 MODELOS INGENUOS (BASELINES)
-    # -------------------------------------------------------------
-    
-    elif model == "ingenuos":
-        logger.info("--- Evaluando Modelos Ingenuos (Baselines) ---")
-        estrategias_ingenuas = [
-            ("naive_persistencia", "persistencia"),
-            ("naive_lag_24h", "lag_24h"),
-            ("naive_lag_168h", "lag_168h"),
-            ("naive_promedio_24h_168h", "promedio_24h_168h"),
-            ]
-
-        for nombre_run, estrategia in estrategias_ingenuas:
-            modelo_ingenuo = BaselineIngenuoP1(estrategia=estrategia)
-            pred_train = modelo_ingenuo.predict(df_train)
-            pred_val = modelo_ingenuo.predict(df_val)
-            pred_test = modelo_ingenuo.predict(df_test)
-
-            df_predicciones[nombre_run] = np.round(pred_test, 2)
-
-            m_train = evaluar_metricas_regresion(y_train, pred_train, "Train")
-            m_val = evaluar_metricas_regresion(y_val, pred_val, "Validación")
-            m_test = evaluar_metricas_regresion(y_test, pred_test, "Test")
-
-            imprimir_metricas_modelo(nombre_run, m_train, m_val, m_test)
-
-            tabla_metricas = pd.DataFrame([m_train, m_val, m_test])
-            tabla_est = calcular_metricas_por_estacion(df_test, pred_test, target_col, df_stations)
-
-            tracker.registrar_run(
-                run_name=f"P1_{nombre_run}",
-                params={
-                    **params_base,
-                    "modelo": nombre_run,
-                    "variables_predictoras": "ninguna (regla fija)",
-            },
-                tags={**tags_base, "version": nombre_run, "stage_of_work": "baseline", "model_family": "naive"},
-                tabla=tabla_metricas,
-                tabla_est=tabla_est,
-                
-            )
-            registrar_fila_comparacion(filas_comparacion, nombre_run, m_train, m_val, m_test)
-   # -------------------------------------------------------------
-    # MODELO V1: REGRESIÓN LINEAL (SIN MEDIAS MÓVILES)
-    # -------------------------------------------------------------
-    elif model == 'v1_lineal':
- 
-        logger.info("--- Entrenando Modelo v1: Regresión Lineal Base ---")
-        modelo_v1 = DemandaLinealP1(features=P1_FEATURES_V1)
-        modelo_v1.fit(df_train[P1_FEATURES_V1], y_train)
-
-        ruta_modelo_v1 = MODELS_DIR / "p1_v1_model.pkl"
-        modelo_v1.save(ruta_modelo_v1)
-        logger.info(f"Modelo v1 guardado en {ruta_modelo_v1}")
-
-        pred_v1_train = modelo_v1.predict(df_train[P1_FEATURES_V1])
-        pred_v1_val = modelo_v1.predict(df_val[P1_FEATURES_V1])
-        pred_v1_test = modelo_v1.predict(df_test[P1_FEATURES_V1])
-        df_predicciones["v1_lineal"] = np.round(pred_v1_test, 2)
-
-        m_v1_train = evaluar_metricas_regresion(y_train, pred_v1_train, "Train")
-        m_v1_val = evaluar_metricas_regresion(y_val, pred_v1_val, "Validación")
-        m_v1_test = evaluar_metricas_regresion(y_test, pred_v1_test, "Test")
-
-        imprimir_metricas_modelo("v1_lineal", m_v1_train, m_v1_val, m_v1_test)
-
-        tabla_est_v1 = calcular_metricas_por_estacion(df_test, pred_v1_test, target_col, df_stations)
-        figuras_v1 = figuras_p1(df_test, pred_v1_test, target_col, "v1")
-
-        tracker.registrar_run(
-            run_name="P1_v1_linear",
-            params={
-                **params_base,
-                "modelo": "LinearRegression",
-                "variables_predictoras": ", ".join(P1_FEATURES_V1),
-                "postprocesamiento": "np.clip(predicciones, 0, None)",
-            },
-            tags={**tags_base, "version": "v1", "stage_of_work": "baseline", "model_family": "linear_regression"},
-            tabla=pd.DataFrame([m_v1_train, m_v1_val, m_v1_test]),
-            tabla_est=tabla_est_v1,
-            modelo=modelo_v1,
-            X_ejemplo=df_train[P1_FEATURES_V1].head(5),
-            figuras=figuras_v1,
-            serialization_format="cloudpickle"
-        )
-        registrar_fila_comparacion(filas_comparacion, "v1_lineal", m_v1_train, m_v1_val, m_v1_test)
-
     else:
         raise ValueError(f"Modelo desconocido: '{model}'. Revisa el parámetro --model.")
 

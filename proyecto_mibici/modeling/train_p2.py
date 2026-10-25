@@ -5,10 +5,17 @@ Script de entrenamiento, evaluación y registro en MLflow para P2 (Riesgo de Des
 Integra y evalúa en Train, Validación y Test:
   - Baseline de Persistencia (inercia operativa)
   - Candidato: Regresión Logística (variantes de peso de clases y umbral)
+  - Búsqueda de hiperparámetros de la logística con nested runs (logistic_search),
+    seguida del candidato final con los mejores valores (logistic_search_tuned)
   - Candidato: Gradient Boosting (HistGradientBoostingClassifier), como en la semana 5
   - Búsqueda de hiperparámetros del gradient boosting con nested runs (gbm_search),
     seguida del candidato final con los mejores valores (gbm_tuned)
 Exporta métricas a reports/p2_comparacion.parquet y predicciones a reports/p2_predicciones_modelos.parquet.
+
+Nota sobre nombres de parámetros: tracking.py descarta los parámetros llamados
+modelo, umbral, class_weight o max_iter (entre otros), porque `mlflow run` ya los
+registra desde -P. Por eso los hiperparámetros de los candidatos se registran con
+prefijo (logistic_*, gbm_*) y el algoritmo como `modelo_clase`.
 """
 
 import itertools
@@ -20,6 +27,7 @@ import pandas as pd
 import typer
 from loguru import logger
 from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, classification_report
 
 from proyecto_mibici.config import (
@@ -27,6 +35,7 @@ from proyecto_mibici.config import (
     MODELS_DIR,
     P2_GBM_GRID,
     P2_GBM_PARAMS,
+    P2_GRID_LOGISTIC,
     P2_OBJETIVO,
     P2_UMBRAL,
     P2_UMBRAL_DECISION,
@@ -43,7 +52,10 @@ from proyecto_mibici.plots import figuras_p2
 
 app = typer.Typer()
 
-MODELOS_VALIDOS = ("baseline", "naive", "logistic", "logistica", "ambos", "gbm", "gbm_search")
+MODELOS_VALIDOS = (
+    "baseline", "naive", "logistic", "logistica", "ambos",
+    "logistic_search", "gbm", "gbm_search",
+)
 
 
 def extraer_metricas_clasificacion(y_real, y_pred, y_prob, conjunto_nombre: str) -> dict:
@@ -78,11 +90,24 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_val: dict, m_test: di
     )
 
 
+def fila_comparacion(nombre: str, m_train: dict, m_val: dict, m_test: dict) -> dict:
+    """Fila de la tabla comparativa de P2."""
+    return {
+        "modelo": nombre,
+        "train_f1": m_train["f1_score"],
+        "val_f1": m_val["f1_score"],
+        "test_precision": m_test["precision"],
+        "test_recall": m_test["recall"],
+        "test_f1": m_test["f1_score"],
+        "test_pr_auc": m_test["pr_auc"],
+    }
+
+
 @app.command()
 def main(
     modelo: str = typer.Option(
         "ambos", "--modelo",
-        help="Modelo a entrenar: 'baseline', 'logistic', 'ambos', 'gbm' o 'gbm_search'",
+        help="Modelo a entrenar: 'baseline', 'logistic', 'ambos', 'logistic_search', 'gbm' o 'gbm_search'",
     ),
     umbral: float = typer.Option(
         P2_UMBRAL_DECISION, "--umbral",
@@ -136,143 +161,88 @@ def main(
     df_predicciones = df_test[cols_id].copy()
     df_predicciones["real"] = y_test.values.astype(int)
 
-    # -------------------------------------------------------------
-    # 1. EVALUACIÓN DE LÍNEA BASE (PERSISTENCIA INGENUA)
-    # -------------------------------------------------------------
-    if modelo in ("baseline", "naive", "ambos"):
-        logger.info("--- Evaluando Línea Base Ingenua: Persistencia ---")
-        modelo_naive = BaselinePersistenciaP2(col_persistencia="en_riesgo")
-
-        pred_train_naive = modelo_naive.predict(df_train)
-        prob_train_naive = modelo_naive.predict_proba(df_train)[:, 1]
-        m_naive_train = extraer_metricas_clasificacion(y_train, pred_train_naive, prob_train_naive, "Train")
-
-        pred_val_naive = modelo_naive.predict(df_val)
-        prob_val_naive = modelo_naive.predict_proba(df_val)[:, 1]
-        m_naive_val = extraer_metricas_clasificacion(y_val, pred_val_naive, prob_val_naive, "Validación")
-
-        pred_test_naive = modelo_naive.predict(df_test)
-        prob_test_naive = modelo_naive.predict_proba(df_test)[:, 1]
-        m_naive_test = extraer_metricas_clasificacion(y_test, pred_test_naive, prob_test_naive, "Test")
-
-        df_predicciones["naive_persistencia"] = pred_test_naive.astype(int)
-        imprimir_metricas_modelo("naive_persistencia", m_naive_train, m_naive_val, m_naive_test)
-
-        tracker.registrar_run(
-            run_name="P2_naive_persistencia",
-            params={
-                **params_base,
-                "modelo": "BaselinePersistenciaP2",
-                "regla": "en_riesgo_t",
-            },
-            tags={
-                **tags_base,
-                "version": "naive_persistencia",
-                "question": "P2",
-                "model_family": "naive",
-                "stage_of_work": "baseline",
-            },
-            tabla=pd.DataFrame([m_naive_train, m_naive_val, m_naive_test]),
-            tabla_est=pd.DataFrame(),
-            df_train=df_train,
-            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
-        )
-
-        filas_comparacion.append({
-            "modelo": "naive_persistencia",
-            "train_f1": m_naive_train["f1_score"],
-            "val_f1": m_naive_val["f1_score"],
-            "test_precision": m_naive_test["precision"],
-            "test_recall": m_naive_test["recall"],
-            "test_f1": m_naive_test["f1_score"],
-            "test_pr_auc": m_naive_test["pr_auc"],
-        })
-
-    # -------------------------------------------------------------
-    # 2. CANDIDATO: REGRESIÓN LOGÍSTICA
-    # -------------------------------------------------------------
-    if modelo in ("logistic", "logistica", "ambos"):
-        logger.info("--- Entrenando Modelo Candidato: RiesgoLogisticoP2 ---")
-        cw = None if class_weight == "None" else class_weight
-        modelo_p2 = RiesgoLogisticoP2(
-            features=P2_VARIABLES,
-            class_weight=cw,
-            random_state=RANDOM_SEED,
-            max_iter=max_iter,
-            umbral=umbral,
-        )
-        modelo_p2.fit(df_train[P2_VARIABLES], y_train)
-
-        ruta_modelo = MODELS_DIR / "p2_logistic_model.pkl"
-        modelo_p2.save(ruta_modelo)
-        logger.info(f"Modelo P2 guardado exitosamente en {ruta_modelo}")
-
-        pred_train_log = modelo_p2.predict(df_train[P2_VARIABLES])
-        prob_train_log = modelo_p2.predict_proba(df_train[P2_VARIABLES])[:, 1]
-        m_log_train = extraer_metricas_clasificacion(y_train, pred_train_log, prob_train_log, "Train")
-
-        pred_val_log = modelo_p2.predict(df_val[P2_VARIABLES])
-        prob_val_log = modelo_p2.predict_proba(df_val[P2_VARIABLES])[:, 1]
-        m_log_val = extraer_metricas_clasificacion(y_val, pred_val_log, prob_val_log, "Validación")
-
-        pred_test_log = modelo_p2.predict(df_test[P2_VARIABLES])
-        prob_test_log = modelo_p2.predict_proba(df_test[P2_VARIABLES])[:, 1]
-        m_log_test = extraer_metricas_clasificacion(y_test, pred_test_log, prob_test_log, "Test")
-
-        df_predicciones["prob_riesgo"] = np.round(prob_test_log, 4)
-        df_predicciones["pred_riesgo"] = pred_test_log.astype(int)
-
-        imprimir_metricas_modelo("logistic_regression", m_log_train, m_log_val, m_log_test)
-
-        figuras = figuras_p2(y_test, pred_test_log, prob_test_log, "logistic_regression")
-        estimador_log = getattr(modelo_p2, "estimator_", modelo_p2)
-
-        tracker.registrar_run(
-            run_name="p2-logistic-regression",
-            params={
-                **params_base,
-                "modelo": "LogisticRegression",
-                "variables_predictoras": ", ".join(P2_VARIABLES),
-                "class_weight": class_weight,
-                "max_iter": max_iter,
-                "umbral": umbral,
-            },
-            tags={
-                **tags_base,
-                "version": "v1_logistic",
-                "question": "P2",
-                "model_family": "logistic_regression",
-                "stage_of_work": "candidate",
-            },
-            tabla=pd.DataFrame([m_log_train, m_log_val, m_log_test]),
-            tabla_est=pd.DataFrame(),
-            modelo=estimador_log,
-            X_ejemplo=df_train[P2_VARIABLES].head(5),
-            figuras=figuras,
-            df_train=df_train[P2_VARIABLES],
-            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
-        )
-
-        filas_comparacion.append({
-            "modelo": "logistic_regression",
-            "train_f1": m_log_train["f1_score"],
-            "val_f1": m_log_val["f1_score"],
-            "test_precision": m_log_test["precision"],
-            "test_recall": m_log_test["recall"],
-            "test_f1": m_log_test["f1_score"],
-            "test_pr_auc": m_log_test["pr_auc"],
-        })
-
-    # -------------------------------------------------------------
-    # 3. CANDIDATOS: GRADIENT BOOSTING (gbm, gbm_search -> gbm_tuned)
-    # -------------------------------------------------------------
-    if modelo in ("gbm", "gbm_search"):
-        # Matrices de variables, una sola vez, para no copiar la tabla en cada modelo
+    # Matrices de variables, una sola vez y solo si se entrena un modelo
+    # (la persistencia no las necesita y así se ahorra memoria)
+    if modelo not in ("baseline", "naive"):
         X_train = df_train[P2_VARIABLES]
         X_val = df_val[P2_VARIABLES]
         X_test = df_test[P2_VARIABLES]
 
-    def entrenar_gbm_candidato(hp: dict, nombre: str, extra_tags: dict = None):
+    # -------------------------------------------------------------
+    # RECETAS DE ENTRENAMIENTO Y REGISTRO DE CANDIDATOS
+    # -------------------------------------------------------------
+    def entrenar_logistico_candidato(
+        nombre: str,
+        hp: dict,
+        extra_tags: dict = None,
+        guardar_pkl: bool = False,
+        cols_pred: tuple = None,
+    ):
+        """Entrena RiesgoLogisticoP2 con hp (class_weight, max_iter, C), lo evalúa y lo registra."""
+        logger.info(f"--- Entrenando Candidato: Regresión Logística ({nombre}) {hp} ---")
+        t0 = time.time()
+        modelo_log = RiesgoLogisticoP2(
+            features=P2_VARIABLES,
+            class_weight=hp["class_weight"],
+            random_state=RANDOM_SEED,
+            max_iter=hp["max_iter"],
+            C=hp["C"],
+            umbral=umbral,
+        )
+        modelo_log.fit(X_train, y_train)
+        segundos = time.time() - t0
+
+        if guardar_pkl:
+            ruta_modelo = MODELS_DIR / "p2_logistic_model.pkl"
+            modelo_log.save(ruta_modelo)
+            logger.info(f"Modelo P2 guardado exitosamente en {ruta_modelo}")
+
+        prob_train = modelo_log.predict_proba(X_train)[:, 1]
+        prob_val = modelo_log.predict_proba(X_val)[:, 1]
+        prob_test = modelo_log.predict_proba(X_test)[:, 1]
+        pred_train = modelo_log.predict(X_train)
+        pred_val = modelo_log.predict(X_val)
+        pred_test = modelo_log.predict(X_test)
+
+        m_train = extraer_metricas_clasificacion(y_train, pred_train, prob_train, "Train")
+        m_val = extraer_metricas_clasificacion(y_val, pred_val, prob_val, "Validación")
+        m_test = extraer_metricas_clasificacion(y_test, pred_test, prob_test, "Test")
+
+        col_prob, col_pred = cols_pred or (f"prob_{nombre}", f"pred_{nombre}")
+        df_predicciones[col_prob] = np.round(prob_test, 4)
+        df_predicciones[col_pred] = pred_test.astype(int)
+
+        imprimir_metricas_modelo(nombre, m_train, m_val, m_test)
+
+        run_id = tracker.registrar_run(
+            run_name=f"p2-{nombre.replace('_', '-')}",
+            params={
+                **params_base,
+                "modelo_clase": "LogisticRegression",
+                "variables_predictoras": ", ".join(P2_VARIABLES),
+                **{f"logistic_{k}": v for k, v in hp.items()},
+            },
+            tags={
+                **tags_base,
+                "version": nombre,
+                "question": "P2",
+                "model_family": "logistic_regression",
+                "stage_of_work": "candidate",
+                **(extra_tags or {}),
+            },
+            tabla=pd.DataFrame([m_train, m_val, m_test]),
+            tabla_est=pd.DataFrame(),
+            modelo=getattr(modelo_log, "estimator_", modelo_log),
+            X_ejemplo=X_train.head(5),
+            figuras=figuras_p2(y_test, pred_test, prob_test, nombre),
+            df_train=X_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
+        # Costo de entrenamiento, para comparar candidatos
+        mlflow.MlflowClient().log_metric(run_id, "train_seconds", segundos)
+        filas_comparacion.append(fila_comparacion(nombre, m_train, m_val, m_test))
+
+    def entrenar_gbm_candidato(nombre: str, hp: dict, extra_tags: dict = None):
         """Entrena un HistGradientBoostingClassifier, lo evalúa en los 3 conjuntos y lo registra.
 
         El modelo se registra tal cual; su predict decide con 0.5, igual que P2_UMBRAL_DECISION.
@@ -301,14 +271,13 @@ def main(
         logger.info(f"[{nombre}] Iteraciones usadas: {modelo_gbm.n_iter_} | Entrenamiento: {segundos:.1f} s")
 
         run_id = tracker.registrar_run(
-            run_name=f"p2-{nombre}",
+            run_name=f"p2-{nombre.replace('_', '-')}",
             params={
                 **params_base,
-                "modelo": "HistGradientBoostingClassifier",
+                "modelo_clase": "HistGradientBoostingClassifier",
                 "variables_predictoras": ", ".join(P2_VARIABLES),
-                "umbral": umbral,
-                "n_iter_real": modelo_gbm.n_iter_,
-                **hp,
+                "gbm_n_iter_real": modelo_gbm.n_iter_,
+                **{f"gbm_{k}": v for k, v in hp.items()},
             },
             tags={
                 **tags_base,
@@ -329,37 +298,27 @@ def main(
         )
         # Costo de entrenamiento, para comparar candidatos
         mlflow.MlflowClient().log_metric(run_id, "train_seconds", segundos)
+        filas_comparacion.append(fila_comparacion(nombre, m_train, m_val, m_test))
 
-        filas_comparacion.append({
-            "modelo": nombre,
-            "train_f1": m_train["f1_score"],
-            "val_f1": m_val["f1_score"],
-            "test_precision": m_test["precision"],
-            "test_recall": m_test["recall"],
-            "test_f1": m_test["f1_score"],
-            "test_pr_auc": m_test["pr_auc"],
-        })
+    def busqueda_anidada(nombre_busqueda: str, combinaciones: list, crear_modelo, familia: str, criterio: str):
+        """Corrida padre con una corrida hija por combinación, evaluada en validación.
 
-    if modelo == "gbm":
-        entrenar_gbm_candidato(P2_GBM_PARAMS, nombre="gbm")
-
-    if modelo == "gbm_search":
-        combinaciones = [
-            dict(zip(P2_GBM_GRID, valores)) for valores in itertools.product(*P2_GBM_GRID.values())
-        ]
+        Devuelve (mejores hiperparámetros, run_id de la corrida padre).
+        criterio es la métrica de validación a maximizar: 'f1_score' o 'pr_auc'.
+        """
         tags_busqueda = {
             **tags_base,
             "question": "P2",
-            "model_family": "hist_gradient_boosting",
+            "model_family": familia,
             "stage_of_work": "search",
         }
-        mejor_hp, mejor_pr_auc = None, -1.0
+        mejor_hp, mejor_valor = None, float("-inf")
 
-        with mlflow.start_run(run_name="P2_gbm_search") as padre:
+        with mlflow.start_run(run_name=nombre_busqueda) as padre:
             mlflow.set_tags(tags_busqueda)
             mlflow.log_params({
                 "n_combinaciones": len(combinaciones),
-                "criterio": "validation_pr_auc",
+                "criterio": f"validation_{criterio}",
                 "umbral_decision": umbral,
             })
 
@@ -370,23 +329,22 @@ def main(
                     logger.info(f"search_{i:02d}: {hp}")
                     try:
                         t0 = time.time()
-                        m = HistGradientBoostingClassifier(random_state=RANDOM_SEED, **hp)
+                        m = crear_modelo(hp)
                         m.fit(X_train, y_train)
                         segundos = time.time() - t0
 
                         prob_val = m.predict_proba(X_val)[:, 1]
                         m_val = extraer_metricas_clasificacion(y_val, prob_val >= umbral, prob_val, "Validación")
-                        mlflow.log_metrics({
-                            **tracker.metricas_a_dict(pd.DataFrame([m_val])),
-                            "train_seconds": segundos,
-                            "n_iter_real": m.n_iter_,
-                        })
+                        metricas = {**tracker.metricas_a_dict(pd.DataFrame([m_val])), "train_seconds": segundos}
+                        if hasattr(m, "n_iter_") and np.isscalar(m.n_iter_):
+                            metricas["n_iter_real"] = float(m.n_iter_)
+                        mlflow.log_metrics(metricas)
                         logger.info(
                             f"search_{i:02d}: Val PR-AUC {m_val['pr_auc']:.4f} | "
                             f"Val F1 {m_val['f1_score']:.4f} | {segundos:.1f} s"
                         )
-                        if m_val["pr_auc"] > mejor_pr_auc:
-                            mejor_pr_auc, mejor_hp = m_val["pr_auc"], hp
+                        if m_val[criterio] > mejor_valor:
+                            mejor_valor, mejor_hp = m_val[criterio], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
                         mlflow.set_tag("error", str(e)[:250])
@@ -394,14 +352,111 @@ def main(
 
             if mejor_hp is None:
                 raise RuntimeError("Ninguna combinación de la búsqueda terminó correctamente.")
-            mlflow.log_metric("best_validation_pr_auc", mejor_pr_auc)
+            mlflow.log_metric(f"best_validation_{criterio}", mejor_valor)
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
-            id_padre = padre.info.run_id
-
-        entrenar_gbm_candidato(mejor_hp, nombre="gbm_tuned", extra_tags={"search_run_id": id_padre})
+            logger.info(f"{nombre_busqueda}: mejor combinación {mejor_hp} (validation_{criterio} = {mejor_valor:.4f})")
+            return mejor_hp, padre.info.run_id
 
     # -------------------------------------------------------------
-    # 4. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
+    # 1. LÍNEA BASE (PERSISTENCIA INGENUA)
+    # -------------------------------------------------------------
+    if modelo in ("baseline", "naive", "ambos"):
+        logger.info("--- Evaluando Línea Base Ingenua: Persistencia ---")
+        modelo_naive = BaselinePersistenciaP2(col_persistencia="en_riesgo")
+
+        pred_train_naive = modelo_naive.predict(df_train)
+        prob_train_naive = modelo_naive.predict_proba(df_train)[:, 1]
+        m_naive_train = extraer_metricas_clasificacion(y_train, pred_train_naive, prob_train_naive, "Train")
+
+        pred_val_naive = modelo_naive.predict(df_val)
+        prob_val_naive = modelo_naive.predict_proba(df_val)[:, 1]
+        m_naive_val = extraer_metricas_clasificacion(y_val, pred_val_naive, prob_val_naive, "Validación")
+
+        pred_test_naive = modelo_naive.predict(df_test)
+        prob_test_naive = modelo_naive.predict_proba(df_test)[:, 1]
+        m_naive_test = extraer_metricas_clasificacion(y_test, pred_test_naive, prob_test_naive, "Test")
+
+        df_predicciones["naive_persistencia"] = pred_test_naive.astype(int)
+        imprimir_metricas_modelo("naive_persistencia", m_naive_train, m_naive_val, m_naive_test)
+
+        tracker.registrar_run(
+            run_name="P2_naive_persistencia",
+            params={
+                **params_base,
+                "modelo_clase": "BaselinePersistenciaP2",
+                "regla": "en_riesgo_t",
+            },
+            tags={
+                **tags_base,
+                "version": "naive_persistencia",
+                "question": "P2",
+                "model_family": "naive",
+                "stage_of_work": "baseline",
+            },
+            tabla=pd.DataFrame([m_naive_train, m_naive_val, m_naive_test]),
+            tabla_est=pd.DataFrame(),
+            df_train=df_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
+        filas_comparacion.append(fila_comparacion("naive_persistencia", m_naive_train, m_naive_val, m_naive_test))
+
+    # -------------------------------------------------------------
+    # 2. CANDIDATO: REGRESIÓN LOGÍSTICA
+    # -------------------------------------------------------------
+    if modelo in ("logistic", "logistica", "ambos"):
+        cw = None if class_weight == "None" else class_weight
+        entrenar_logistico_candidato(
+            "logistic_regression",
+            {"class_weight": cw, "max_iter": max_iter, "C": 1.0},
+            guardar_pkl=True,
+            cols_pred=("prob_riesgo", "pred_riesgo"),
+        )
+
+    # -------------------------------------------------------------
+    # 3. BÚSQUEDA ANIDADA: REGRESIÓN LOGÍSTICA -> logistic_search_tuned
+    # -------------------------------------------------------------
+    if modelo == "logistic_search":
+        combinaciones = [
+            dict(zip(P2_GRID_LOGISTIC, valores)) for valores in itertools.product(*P2_GRID_LOGISTIC.values())
+        ]
+        mejor_hp, id_padre = busqueda_anidada(
+            "P2_logistic_search",
+            combinaciones,
+            crear_modelo=lambda hp: LogisticRegression(random_state=RANDOM_SEED, **hp),
+            familia="logistic_regression",
+            criterio="f1_score",
+        )
+        # El modelo final usa TODOS los hiperparámetros ganadores (incluido C)
+        entrenar_logistico_candidato(
+            "logistic_search_tuned",
+            {"class_weight": mejor_hp["class_weight"], "max_iter": mejor_hp["max_iter"], "C": mejor_hp["C"]},
+            extra_tags={"search_run_id": id_padre},
+        )
+
+    # -------------------------------------------------------------
+    # 4. CANDIDATO: GRADIENT BOOSTING (como en la semana 5)
+    # -------------------------------------------------------------
+    if modelo == "gbm":
+        entrenar_gbm_candidato("gbm", P2_GBM_PARAMS)
+
+    # -------------------------------------------------------------
+    # 5. BÚSQUEDA ANIDADA: GRADIENT BOOSTING -> gbm_tuned
+    # -------------------------------------------------------------
+    if modelo == "gbm_search":
+        combinaciones = [
+            dict(zip(P2_GBM_GRID, valores)) for valores in itertools.product(*P2_GBM_GRID.values())
+        ]
+        mejor_hp, id_padre = busqueda_anidada(
+            "P2_gbm_search",
+            combinaciones,
+            crear_modelo=lambda hp: HistGradientBoostingClassifier(random_state=RANDOM_SEED, **hp),
+            familia="hist_gradient_boosting",
+            criterio="pr_auc",
+        )
+        entrenar_gbm_candidato("gbm_tuned", mejor_hp, extra_tags={"search_run_id": id_padre})
+
+    # -------------------------------------------------------------
+    # 6. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
     # -------------------------------------------------------------
     df_p2_comp = pd.DataFrame(filas_comparacion).set_index("modelo")
     p2_comp_path = REPORTS_DIR / "p2_comparacion.parquet"

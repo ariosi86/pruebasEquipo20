@@ -10,6 +10,9 @@ Serializa el modelo oficial en models/p3_kmeans_model.pkl.
 """
 
 from pathlib import Path
+import itertools
+import time
+import mlflow
 import numpy as np
 import pandas as pd
 import typer
@@ -21,6 +24,7 @@ from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_NAME,
     MODELS_DIR,
     P3_DURACION_MAX_MIN,
+    P3_GRID_KMEANS,
     P3_K_ELEGIDO,
     P3_MIN_VIAJES_ESTACION,
     P3_TEST_FIN,
@@ -250,7 +254,117 @@ def main(
         })
 
     # -------------------------------------------------------------
-    # 3. GUARDAR Y MOSTRAR TABLA COMPARATIVA (SOLO PARQUET)
+    # 3. BÚSQUEDA ANIDADA DE HIPERPARÁMETROS (KMEANS)
+    # -------------------------------------------------------------
+    elif modelo.lower() == "kmeans_search":
+        combinaciones = [dict(zip(P3_GRID_KMEANS, v)) for v in itertools.product(*P3_GRID_KMEANS.values())]
+        mejor_hp, mejor_silhouette = None, float("-inf")
+
+        with mlflow.start_run(run_name="P3_kmeans_search") as padre:
+            mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "kmeans"})
+            mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "test_silhouette", "objetivo": "kmeans"})
+
+            for i, hp in enumerate(combinaciones):
+                with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    mlflow.log_params(hp)
+                    logger.info(f"search_{i:02d}:{hp}")
+                    try:
+                        t0 = time.time()
+                        modelo_k = ClusterKMeansP3(
+                            n_clusters=hp["n_clusters"],
+                            n_init=hp["n_init"],
+                            random_state=RANDOM_SEED,
+                        )
+                        modelo_k.fit(perfil_train[P3_VARIABLES])
+                        segundos = time.time() - t0
+
+                        pred_train_k = modelo_k.labels_
+                        pred_test_k = modelo_k.predict(perfil_test[P3_VARIABLES])
+
+                        m_k_train = evaluar_metricas_clustering(X_train_eval, pred_train_k, "Train")
+                        m_k_test = evaluar_metricas_clustering(X_test_eval, pred_test_k, "Test")
+
+                        mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "kmeans"})
+                        mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_k_test])), "train_seconds": segundos})
+
+                        if m_k_test["silhouette"] > mejor_silhouette:
+                            mejor_silhouette, mejor_hp = m_k_test["silhouette"], hp
+                    except Exception as e:
+                        mlflow.set_tag("fallo", "true")
+                        mlflow.set_tag("error", str(e)[:250])
+                        logger.warning(f"search_{i:02d} falló y se omite: {e}")
+                        continue
+
+            mlflow.log_metric("best_validation_silhouette", mejor_silhouette)
+            mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
+            id_padre = padre.info.run_id
+
+        # Entrenar modelo final con mejores hiperparámetros
+        modelo_kmeans_final = ClusterKMeansP3(
+            n_clusters=mejor_hp["n_clusters"],
+            n_init=mejor_hp["n_init"],
+            random_state=RANDOM_SEED,
+        )
+        modelo_kmeans_final.fit(perfil_train[P3_VARIABLES])
+
+        pred_train_k = modelo_kmeans_final.labels_
+        pred_test_k = modelo_kmeans_final.predict(perfil_test[P3_VARIABLES])
+
+        m_k_train = evaluar_metricas_clustering(X_train_eval, pred_train_k, "Train")
+        m_k_test = evaluar_metricas_clustering(X_test_eval, pred_test_k, "Test")
+
+        df_predicciones["grupo_kmeans_search"] = pred_test_k
+        imprimir_metricas_modelo("kmeans_search_tuned", m_k_train, m_k_test)
+
+        perfil_grupos = perfil_train[P3_VARIABLES].assign(grupo=pred_train_k)
+        resumen_grupos = perfil_grupos.groupby("grupo").mean().round(2)
+        resumen_grupos["n_estaciones"] = perfil_grupos["grupo"].value_counts()
+
+        fig_mapa_kmeans = graficar_mapa_grupos(
+            perfil_train,
+            pred_train_k,
+            df_stations,
+            f"Grupos de Estaciones MiBici (KMeans Search K={mejor_hp['n_clusters']})",
+        )
+
+        estimador_pipeline = getattr(modelo_kmeans_final, "pipeline_", getattr(modelo_kmeans_final, "pipeline", None))
+
+        tracker.registrar_run(
+            run_name="p3-kmeans-search-tuned",
+            params={
+                **params_base,
+                "modelo": "KMeans_Search",
+                "n_clusters": mejor_hp["n_clusters"],
+                "n_init": mejor_hp["n_init"],
+                "variables": ", ".join(P3_VARIABLES),
+            },
+            tags={
+                **tags_base,
+                "version": "kmeans_search_tuned",
+                "question": "P3",
+                "model_family": "kmeans",
+                "stage_of_work": "candidate",
+                "search_run_id": id_padre,
+            },
+            tabla=pd.DataFrame([m_k_train, m_k_test]),
+            tabla_est=resumen_grupos.reset_index(),
+            modelo=estimador_pipeline,
+            X_ejemplo=perfil_train[P3_VARIABLES].head(5),
+            figuras={"mapa_kmeans_search": fig_mapa_kmeans},
+            df_train=perfil_train[P3_VARIABLES],
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
+
+        filas_comparacion.append({
+            "modelo": "kmeans_search_tuned",
+            "train_silhouette": m_k_train["silhouette"],
+            "train_davies_bouldin": m_k_train["davies_bouldin"],
+            "test_silhouette": m_k_test["silhouette"],
+            "test_davies_bouldin": m_k_test["davies_bouldin"],
+        })
+
+    # -------------------------------------------------------------
+    # 4. GUARDAR Y MOSTRAR TABLA COMPARATIVA (SOLO PARQUET)
     # -------------------------------------------------------------
     df_p3_comp = pd.DataFrame(filas_comparacion).set_index("modelo")
     p3_comp_path = REPORTS_DIR / "p3_comparacion.parquet"
