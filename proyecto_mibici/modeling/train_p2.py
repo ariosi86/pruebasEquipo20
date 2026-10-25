@@ -9,15 +9,20 @@ Exporta métricas a reports/p2_comparacion.parquet y predicciones a reports/p2_p
 """
 
 from pathlib import Path
+import itertools
+import time
+import mlflow
 import numpy as np
 import pandas as pd
 import typer
 from loguru import logger
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import auc, classification_report, precision_recall_curve
 
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_NAME,
     MODELS_DIR,
+    P2_GRID_LOGISTIC,
     P2_OBJETIVO,
     P2_UMBRAL,
     P2_VARIABLES,
@@ -236,7 +241,114 @@ def main(
         })
 
     # -------------------------------------------------------------
-    # 3. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
+    # 3. BÚSQUEDA ANIDADA DE HIPERPARÁMETROS (LOGISTIC REGRESSION)
+    # -------------------------------------------------------------
+    elif modelo.lower() == "logistic_search":
+        combinaciones = [dict(zip(P2_GRID_LOGISTIC, v)) for v in itertools.product(*P2_GRID_LOGISTIC.values())]
+        mejor_hp, mejor_f1 = None, float("-inf")
+
+        with mlflow.start_run(run_name="P2_logistic_search") as padre:
+            mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "logistic_regression"})
+            mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "validation_f1", "objetivo": "logistic"})
+
+            for i, hp in enumerate(combinaciones):
+                with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    mlflow.log_params(hp)
+                    logger.info(f"search_{i:02d}:{hp}")
+                    try:
+                        t0 = time.time()
+                        m = LogisticRegression(random_state=RANDOM_SEED, **hp)
+                        m.fit(df_train[P2_VARIABLES], y_train)
+                        segundos = time.time() - t0
+
+                        pred_val = m.predict(df_val[P2_VARIABLES])
+                        prob_val = m.predict_proba(df_val[P2_VARIABLES])[:, 1]
+                        m_val = extraer_metricas_clasificacion(y_val, pred_val, prob_val, "Validación")
+
+                        mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "logistic_regression"})
+                        mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])), "train_seconds": segundos})
+
+                        if m_val["f1_score"] > mejor_f1:
+                            mejor_f1, mejor_hp = m_val["f1_score"], hp
+                    except Exception as e:
+                        mlflow.set_tag("fallo", "true")
+                        mlflow.set_tag("error", str(e)[:250])
+                        logger.warning(f"search_{i:02d} falló y se omite: {e}")
+                        continue
+
+            mlflow.log_metric("best_validation_f1", mejor_f1)
+            mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
+            id_padre = padre.info.run_id
+
+        # Entrenar modelo final con mejores hiperparámetros
+        modelo_final = RiesgoLogisticoP2(
+            features=P2_VARIABLES,
+            class_weight=mejor_hp["class_weight"],
+            random_state=RANDOM_SEED,
+            max_iter=mejor_hp["max_iter"],
+            umbral=umbral,
+        )
+        modelo_final.fit(df_train[P2_VARIABLES], y_train)
+
+        pred_train_log = modelo_final.predict(df_train[P2_VARIABLES])
+        prob_train_log = modelo_final.predict_proba(df_train[P2_VARIABLES])[:, 1]
+        m_log_train = extraer_metricas_clasificacion(y_train, pred_train_log, prob_train_log, "Train")
+
+        pred_val_log = modelo_final.predict(df_val[P2_VARIABLES])
+        prob_val_log = modelo_final.predict_proba(df_val[P2_VARIABLES])[:, 1]
+        m_log_val = extraer_metricas_clasificacion(y_val, pred_val_log, prob_val_log, "Validación")
+
+        pred_test_log = modelo_final.predict(df_test[P2_VARIABLES])
+        prob_test_log = modelo_final.predict_proba(df_test[P2_VARIABLES])[:, 1]
+        m_log_test = extraer_metricas_clasificacion(y_test, pred_test_log, prob_test_log, "Test")
+
+        df_predicciones["prob_riesgo_search"] = np.round(prob_test_log, 4)
+        df_predicciones["pred_riesgo_search"] = pred_test_log.astype(int)
+
+        imprimir_metricas_modelo("logistic_search_tuned", m_log_train, m_log_val, m_log_test)
+
+        figuras = figuras_p2(y_test, pred_test_log, prob_test_log, "logistic_search_tuned")
+        estimador_log = getattr(modelo_final, "estimator_", modelo_final)
+
+        tracker.registrar_run(
+            run_name="p2-logistic-search-tuned",
+            params={
+                **params_base,
+                "modelo": "LogisticRegression_Search",
+                "variables_predictoras": ", ".join(P2_VARIABLES),
+                "class_weight": mejor_hp["class_weight"],
+                "max_iter": mejor_hp["max_iter"],
+                "umbral": umbral,
+            },
+            tags={
+                **tags_base,
+                "version": "logistic_search_tuned",
+                "question": "P2",
+                "model_family": "logistic_regression",
+                "stage_of_work": "candidate",
+                "search_run_id": id_padre,
+            },
+            tabla=pd.DataFrame([m_log_train, m_log_val, m_log_test]),
+            tabla_est=pd.DataFrame(),
+            modelo=estimador_log,
+            X_ejemplo=df_train[P2_VARIABLES].head(5),
+            figuras=figuras,
+            df_train=df_train[P2_VARIABLES],
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+        )
+
+        filas_comparacion.append({
+            "modelo": "logistic_search_tuned",
+            "train_f1": m_log_train["f1_score"],
+            "val_f1": m_log_val["f1_score"],
+            "test_precision": m_log_test["precision"],
+            "test_recall": m_log_test["recall"],
+            "test_f1": m_log_test["f1_score"],
+            "test_pr_auc": m_log_test["pr_auc"],
+        })
+
+    # -------------------------------------------------------------
+    # 4. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
     # -------------------------------------------------------------
     df_p2_comp = pd.DataFrame(filas_comparacion).set_index("modelo")
     p2_comp_path = REPORTS_DIR / "p2_comparacion.parquet"
