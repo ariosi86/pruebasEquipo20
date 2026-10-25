@@ -390,7 +390,13 @@ Desde la raíz del repositorio, con el entorno virtual activado:
 mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
 ```
 
-La URI de seguimiento se declara en `MLproject` como `MLFLOW_TRACKING_URI = sqlite:///mlflow.db` y también está en `config.py` (`URI_MLFLOW_TRACKING`). Accede a la interfaz en `http://localhost:5000`.
+Accede a la interfaz en `http://localhost:5000`. En la terminal donde vas a lanzar `mlflow run`, define la URI del servidor:
+
+```bash
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+```
+
+`mlflow run` crea la corrida antes de ejecutar el script y necesita saber en qué servidor hacerlo; MLflow no lee la sección `variables` del `MLproject`. Los scripts usan la misma URI desde `config.py` (`URI_MLFLOW_TRACKING`). Los hiperparámetros siempre van como `-P clave=valor`.
 
 ### 2. Reproducir la ingesta de datos
 
@@ -413,7 +419,7 @@ El entry point `train` recibe `pregunta` (`p1`, `p2` o `p3`) y `modelo`, además
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=baseline
 
 # Candidato: Regresión de Poisson
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=poisson --lr 0.05 --alpha 0.0001 --max-iter 300
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=poisson -P lr=0.05 -P alpha=0.0001 -P max_iter=300
 
 # Candidato: LightGBM Poisson (búsqueda anidada)
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=lgbm_p_search
@@ -429,13 +435,13 @@ mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P p
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=baseline
 
 # Candidato: Regresión Logística balanceada
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic --umbral 0.5 --class-weight balanced --max-iter 1000
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic -P umbral=0.5 -P class_weight=balanced -P max_iter=1000
 
 # Búsqueda anidada de hiperparámetros Logistic Regression
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic_search
 
 # Ambos (baseline + candidato + search)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos --umbral 0.5
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos -P umbral=0.5
 ```
 
 #### P3 — Clustering de estaciones (no supervisado)
@@ -459,6 +465,9 @@ mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P p
 ```bash
 # 1. Levantar MLflow (terminal aparte)
 mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+
+# En la terminal de trabajo
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 
 # 2. Ingesta de datos
 mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
