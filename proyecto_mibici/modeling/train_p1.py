@@ -114,6 +114,7 @@ def registrar_fila_comparacion(filas_comparacion, nombre_modelo, m_train, m_val,
         "modelo": nombre_modelo,
         "train_mae": m_train["MAE"],
         "train_wape": m_train["WAPE"],
+        "val_mae": m_val["MAE"],
         "val_wape": m_val["WAPE"],
         "test_mae": m_test["MAE"],
         "test_rmse": m_test["RMSE"],
@@ -125,7 +126,7 @@ def registrar_fila_comparacion(filas_comparacion, nombre_modelo, m_train, m_val,
 
 @app.command()
 def main(
-    model: str = typer.Option("baseline", "--model", "-m", help="Modelo a entrenar: 'baseline', 'poisson', 'lgbm_poisson', 'lgbm_search'"),
+    model: str = typer.Option("baseline", "--model", "-m", help="Modelo a entrenar: 'baseline', 'poisson', 'lgbm_poisson', 'lgbm_tweedie,'lgbm_p_search', 'lgbm_t_search'"),
     learning_rate: float = typer.Option(P1_LR_DEFAULT, "--lr", help="Tasa de aprendizaje para Poisson o LightGBM."),
     alpha: float = typer.Option(P1_ALPHA_DEFAULT, "--alpha", help='Tasa de penalización para Poisson'),
     max_iter: int = typer.Option(P1_MAX_ITER_DEFAULT, "--max_iter", help="Max iterations para Poisson"),
@@ -243,7 +244,7 @@ def main(
             "modelo": f"LightGBM_{hp['objective']}",
             "variables": ", ".join(P1_FEATURES_V2),
             **hp},
-            tags={**tags_base, "version": nombre, "stage_of_work": "candidate",
+            tags={**tags_base, "version": nombre, "stage_of_work": "candidato",
                 "model_family": "lightgbm", **(extra_tags or {})},
             tabla=pd.DataFrame([m_train, m_val, m_test]),
             tabla_est=calcular_metricas_por_estacion(df_test, pred_test, target_col, df_stations),
@@ -316,8 +317,7 @@ def main(
         poisson_model.fit(df_train[P1_FEATURES_V2], y_train)
         
         ruta_modelo_poisson = MODELS_DIR / "p1_poisson_model.pkl"
-        logger.info(f"Modelo Poisson guardado en {ruta_modelo_poisson}")
-
+    
         pred_poisson_train = poisson_model.predict(df_train[P1_FEATURES_V2])
         pred_poisson_val = poisson_model.predict(df_val[P1_FEATURES_V2])
         pred_poisson_test = poisson_model.predict(df_test[P1_FEATURES_V2])
@@ -358,7 +358,7 @@ def main(
     # -------------------------------------------------------------
     elif model == "lgbm_p_search":
         combinaciones = [dict(zip(P1_LGBM_GRID_POISSON, v)) for v in itertools.product(*P1_LGBM_GRID_POISSON.values())]
-        mejor_hp, mejor_wape = None, float("inf")
+        mejor_hp, mejor_mae = None, float("inf")
 
         with mlflow.start_run(run_name="P1_lgbm_poisson_search") as padre:
             mlflow.set_tags({**tags_base,"stage_of_work": "search", "model_family": "lightgbm"})
@@ -384,7 +384,7 @@ def main(
                     
                         mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
                                         "train_seconds": segundos})
-                        if m_val["WAPE"] < mejor_wape:
+                        if m_val["MAE"] < mejor_mae:
                             mejor_mae, mejor_hp = m_val["MAE"], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
@@ -397,8 +397,8 @@ def main(
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
-            # Registrar el modelo final anidado bajo el padre de búsqueda
-            entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_poisson_tuned",
+        # Registrar el modelo final anidado bajo el padre de búsqueda
+        entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_poisson_tuned",
                                 extra_tags={"search_run_id": id_padre}, nested=True)
     # -------------------------------------------------------------
     # POISSON CANDIDATO
@@ -412,7 +412,7 @@ def main(
     # -------------------------------------------------------------
     elif model == "lgbm_t_search":
         combinaciones = [dict(zip(P1_LGBM_GRID_TWEEDIE, v)) for v in itertools.product(*P1_LGBM_GRID_TWEEDIE.values())]
-        mejor_hp, mejor_wape = None, float("inf")
+        mejor_hp, mejor_mae = None, float("inf")
 
         with mlflow.start_run(run_name="P1_lgbm_tweedie_search") as padre:
             mlflow.set_tags({**tags_base, "stage_of_work": "search", "model_family": "lightgbm"})
@@ -438,7 +438,7 @@ def main(
                     
                         mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
                                         "train_seconds": segundos})
-                        if m_val["WAPE"] < mejor_mae:
+                        if m_val["MAE"] < mejor_mae:
                             mejor_mae, mejor_hp = m_val["MAE"], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
@@ -451,8 +451,8 @@ def main(
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
-            # Registrar el modelo final anidado bajo el padre de búsqueda
-            entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_tweedie_tuned",
+        # Registrar el modelo final anidado bajo el padre de búsqueda
+        entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_tweedie_tuned",
                                 extra_tags={"search_run_id": id_padre}, nested=True)
     # -------------------------------------------------------------
     # TWEEDIE CANDIDATO

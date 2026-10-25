@@ -35,13 +35,12 @@ MODELOS_A_REGISTRAR = [
         "name": "mibici-equipo20-p1-demanda",
         "pregunta": "P1",
         "descripcion": (
-            "Modelo de produccion para P1 (demanda horaria de viajes por estacion). "
-            "LightGBM Regresión Tweedie (objective=tweedie, varianza=1.5, lr=0.1, "
-            "num_leaves=127, n_estimators=600) sobre features V2 (lags 1/24/168h, "
-            "medias moviles 3h/168h, codificacion ciclica del hora, fin de semana). "
-            "Seleccionado por mejor Test MAE (0.789) y WAPE (0.630) frente al baseline "
-            "lineal con rolling (MAE 0.853, WAPE 0.681), con sesgo casi nulo y "
-            "comportamiento estable entre Train y Test."
+            "Modelo de producción para P1 (demanda horaria de viajes por estación)." 
+            "LightGBM Tweedie (objective=tweedie, tweedie_variance_power=1.8, lr=0.1,"
+            "num_leaves=127, n_estimators=600) sobre features V2. Seleccionado por menor"
+            "MAE de validación (0.816) en una búsqueda anidada; en prueba MAE 0.789 y WAPE" 
+            "0.630 frente al baseline lineal con rolling (0.853 y 0.681)."
+            "Subestima levemente la demanda (sesgo −2.1%)."
         ),
         "metrica_test": "test_mae",
         "predicado": lambda tags, params, metrics: (
