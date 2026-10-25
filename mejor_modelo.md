@@ -14,7 +14,7 @@ Este documento resume la comparación de modelos ejecutada con `run_train.py` (t
 
 | Pregunta | Modelo elegido | Nombre en Model Registry | Métrica de decisión (Test) | Baseline (Test) | Mejora vs. baseline |
 |----------|----------------|--------------------------|----------------------------|-----------------|---------------------|
-| P1 | LightGBM Regresión Tweedie (`lgbm_tweedie`) | `mibici-equipo20-p1-demanda` | Test MAE **0.790** | 0.853 (lineal + rolling) | −7.3 % MAE / −7.4 % WAPE |
+| P1 | LightGBM Tweedie (`lgbm_tweedie`, alias `champion`); challenger: LightGBM Poisson | `mibici-equipo20-p1-demanda` | Val MAE **0.818** (criterio) · Test MAE 0.790 (reportado) | 0.853 (lineal + rolling) | −7.4 % MAE / −8.7 % RMSE |
 | P2 | Regresión Logística sin peso de clases, umbral 0.5 (`logistic_sin_peso`) | `mibici-equipo20-p2-riesgo` | Test F1 **0.832** / PR-AUC **0.806** | F1 ~0.79 (logístico balanceado) | +5 pts F1 / +0.7 pts PR-AUC |
 | P3 | KMeans funcional con K=4 | `mibici-equipo20-p3-grupos` | Test Silhouette **0.182** / DB **1.535** | Silhouette 0.019 / DB 3.71 (municipio) | +0.163 Silhouette / −2.18 DB |
 
@@ -24,15 +24,16 @@ Este documento resume la comparación de modelos ejecutada con `run_train.py` (t
 
 ### 3.1 P1 — Demanda horaria (Regresión)
 
-Métrica de negocio: error absoluto en la estimación de viajes para la hora $t+1$ (el operador planea la flota; subestimar genera falta de bicis, sobreestimar genera ociosidad). Se usa **MAE** y **WAPE** como métricas principales, con **RMSE** y **Sesgo** como secundarias.
+Se selecciona por menor **MAE de validación**; la prueba se reporta una sola vez.
+WAPE, RMSE y sesgo son complementarias. Sesgo = media(pred − real).
 
-| Modelo | Hiperparámetros clave | Validación MAE | Validación WAPE | Test MAE | Test RMSE | Test WAPE | Test Sesgo | Mejora MAE vs baseline |
-|--------|----------------------|----------------|-----------------|----------|-----------|-----------|------------|------------------------|
-| Baseline (lineal + rolling, v2) | `StandardScaler` + `LinearRegression`, features V2 (lags 1/24/168h, rolling 3/168h, ciclor diario, fin de semana) | 0.886 | 0.663 | **0.853** | 1.545 | 0.681 | 0.004 | — (referencia) |
-| v1_lineal (sin rolling) | `StandardScaler` + `LinearRegression`, features V1 (sin rolling) | — | — | 0.865 | 1.558 | 0.691 | 0.009 | −1.4 % |
-| Regresión de Poisson | `PoissonRegressor(alpha=1e-4, max_iter=300)`, lr=0.05 | — | — | 1.181 | 4.341 | 0.943 | 0.137 | −38.4 % (peor) |
-| LightGBM Poisson | `objective=poisson`, lr=0.1, num_leaves=127, n_estimators=600 | 0.820 | 0.614 | **0.792** | 1.422 | 0.632 | −0.018 | +7.3 % |
-| LightGBM Tweedie (ELEGIDO) | `objective=tweedie`, tweedie_variance_power=1.5, lr=0.1, num_leaves=127, n_estimators=600 | 0.818 | 0.612 | **0.790** | 1.410 | 0.631 | −0.023 | **+7.3 %** |
+| Modelo | Hiperparámetros clave | Val MAE | Val WAPE | Test MAE | Test RMSE | Test WAPE | Test sesgo | Mejora MAE test |
+|---|---|---|---|---|---|---|---|---|
+| Baseline (lineal + rolling, v2) | StandardScaler + LinearRegression, features V2 | 0.885 | 0.663 | 0.853 | 1.545 | 0.681 | +0.004 | referencia |
+| Regresión de Poisson | PoissonRegressor(alpha=1e-4, max_iter=300) | 1.165 | 0.872 | 1.181 | 4.341 | 0.943 | +0.137 | −38.5 % |
+| LightGBM Poisson (challenger) | objective=poisson, lr=0.1, num_leaves=127, n_estimators=600 | 0.819 | 0.614 | 0.792 | 1.422 | 0.632 | −0.018 | +7.2 % |
+| LightGBM Tweedie (champion) | objective=tweedie, power=1.5, lr=0.1, num_leaves=127, n_estimators=600 | 0.818 | 0.612 | 0.790 | 1.410 | 0.631 | −0.023 | +7.4 % |
+
 
 ### 3.2 P2 — Riesgo de desbalance (Clasificación)
 
@@ -61,11 +62,12 @@ Métrica de negocio: identificar grupos funcionales de estaciones para planeaci�
 
 ## 4. Análisis de la comparación y justificación del modelo elegido
 
-### P1 — Demanda horaria → **LightGBM Tweedie**
-- **Desempeño vs. baseline:** LightGBM Tweedie reduce el Test MAE de 0.853 a 0.790 (−7.3 %) y el WAPE de 0.681 a 0.631 (−7.4 %). LightGBM Poisson es casi idéntico (0.792 / 0.632), pero Tweedie es marginalmente mejor y más adecuado para conteos con muchos ceros (horas sin viajes), propia de la demanda horaria por estación.
-- **Métrica ligada a la decisión:** El operador planea la flota; un error sistemático de subestimación deja la flota corta. Tweedie tiene sesgo casi nulo en Test (−0.023), por lo que no sesga ni al alza ni a la baja la planificación.
-- **Estabilidad:** Train y Test son consistentes (Train MAE 0.818 vs Test 0.790; WAPE 0.612 vs 0.631), sin indicios de sobreajuste.
-- **Costo:** LightGBM es rápido de entrenar e inferir sobre la matriz de características horarias (lags + ventanales), mucho más ligero que un búsqueda anidada completa, y la inferencia por estación/hora es trivial en producción.
+### P1 → LightGBM Tweedie (champion)
+- **Regla:** menor MAE de validación (0.818 vs 0.819). Empate práctico; Poisson es challenger por menor sesgo (−1.4 % vs −1.9 %).
+- **Desempeño:** MAE de prueba −7.4 % y RMSE −8.7 % frente al baseline.
+- **Sesgo:** ambos subestiman levemente; el Poisson lineal sobreestima +11 %.
+- **Estabilidad:** mejora en validación (7.6 %) y prueba (7.4 %) casi idéntica; repetición con misma semilla reproduce las métricas.
+- **Costo:** ~5 s por corrida completa, comparable al baseline.
 
 ### P2 — Riesgo de desbalance → **Regresión Logística sin peso, umbral 0.5**
 - **Desempeño vs. baseline:** Sin peso de clases alcanza Test F1 0.832 y PR-AUC 0.806, superando al logístico balanceado (F1 0.794, PR-AUC 0.799) y al umbral sensible 0.3 (F1 0.706, que sacrifica demasiada precisión: 0.589).
