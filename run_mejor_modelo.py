@@ -66,7 +66,7 @@ MODELOS_A_REGISTRAR = [
         "metrica_test": "test_f1_score",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P2"
-            and "logisticregression" in str(params.get("modelo", "")).lower()
+            and "logistic" in str(params.get("modelo", "")).lower()
             and str(params.get("class_weight", "")) in ("balanced", "None")
             and str(params.get("umbral", "")) == "0.5"
         ),

@@ -39,6 +39,8 @@ from proyecto_mibici.config import (
     TRIPS_PROCESSED_PATH
 )
 
+CONFIG_PATH = PROJ_ROOT / "proyecto_mibici" / "config.py"
+
 NOMBRES_CONJUNTO = {
     "Train": "train",
     "Validación": "validation",
@@ -103,6 +105,37 @@ class MLFlowTracker:
         return metricas
 
     @staticmethod
+    def _get_source_tags() -> dict:
+        """Obtiene los tags de source del run activo (si existe) para propagarlos a runs hijos."""
+        tags = {}
+        run_activo = mlflow.active_run()
+        if run_activo is not None:
+            run_data = mlflow.get_run(run_activo.info.run_id).data
+            source_keys = [
+                "mlflow.source.type",
+                "mlflow.source.name",
+                "mlflow.source.git.commit",
+                "mlflow.source.git.repoURL",
+                "mlflow.source.git.branch",
+                "mlflow.source.git.dirty",
+                "mlflow.project.entryPoint",
+                "mlflow.project.env",
+                "mlflow.source.git.repoURL",
+            ]
+            for k in source_keys:
+                v = run_data.tags.get(k)
+                if v is not None:
+                    tags[k] = v
+        return tags
+
+    @staticmethod
+    def propagar_source_tags() -> None:
+        """Propaga los tags de source del run padre al run activo actual (run hijo)."""
+        source_tags = MLFlowTracker._get_source_tags()
+        if source_tags:
+            mlflow.set_tags(source_tags)
+
+    @staticmethod
     def log_params_nuevos(params: dict) -> None:
         """Registra en la corrida activa solo los parámetros que todavía no tiene.
 
@@ -162,8 +195,13 @@ class MLFlowTracker:
         serialization_format: str = None,
         df_train: pd.DataFrame = None,
         ruta_entrenamiento: str = None,
+        nested: bool = False,
     ) -> str:
-        """Crea un run con parámetros, métricas, modelo, figuras y tabla por estación."""
+        """Crea un run con parámetros, métricas, modelo, figuras y tabla por estación.
+
+        Si nested=True, no cierra el run activo previo y crea el run como hijo anidado
+        heredando los tags de source (mlflow.source.type=PROJECT, etc.) del run padre.
+        """
         # Etiqueta question automática a partir del parámetro pregunta
         if "question" not in tags and "pregunta" in params:
             tags = {**tags, "question": params["pregunta"]}
@@ -171,13 +209,19 @@ class MLFlowTracker:
         # Asegurar que usamos el experimento correcto
         mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
 
-        # Terminar cualquier run activo previo para evitar conflictos
-        try:
-            mlflow.end_run()
-        except Exception:
-            pass
+        # Propagar tags de source (mlflow.source.type=PROJECT, etc.) del run activo
+        source_tags = self._get_source_tags()
+        if source_tags:
+            tags = {**tags, **source_tags}
 
-        with mlflow.start_run(run_name=run_name) as run:
+        # Terminar run activo previo SOLO si NO es anidado
+        if not nested:
+            try:
+                mlflow.end_run()
+            except Exception:
+                pass
+
+        with mlflow.start_run(run_name=run_name, nested=nested) as run:
             self.log_params_nuevos(params)
             mlflow.log_metrics(self.metricas_a_dict(tabla))
             mlflow.set_tags(tags)
@@ -241,14 +285,17 @@ class MLFlowTracker:
             if figuras:
                 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
                 for nombre, fig in figuras.items():
-                    mlflow.log_figure(fig, f"graficas/{nombre}.png")
+                    mlflow.log_figure(fig, f"plots/{nombre}.png")
                     ruta_local_fig = FIGURES_DIR / f"{nombre}.png"
                     fig.savefig(ruta_local_fig, dpi=150, bbox_inches="tight")
 
             if tabla_est is not None and not tabla_est.empty:
-                mlflow.log_text(tabla_est.to_csv(index=False), "metricas_por_estacion.csv")
+                mlflow.log_text(tabla_est.to_csv(index=False), "data/metricas_por_estacion.csv")
 
             if Path(MANIFEST_PATH).exists():
-                mlflow.log_artifact(str(MANIFEST_PATH))
+                mlflow.log_artifact(str(MANIFEST_PATH), artifact_path="data")
+
+            if Path(CONFIG_PATH).exists():
+                mlflow.log_artifact(str(CONFIG_PATH), artifact_path="config")
 
             return run.info.run_id

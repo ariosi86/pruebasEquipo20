@@ -103,6 +103,9 @@ except ModuleNotFoundError:
 # ==========================================
 P1_TARGET = "target_next_hour"
 P1_MAX_PCT_VACIAS = 90
+P1_LR_DEFAULT = 0.05
+P1_ALPHA_DEFAULT = 0.0001
+P1_MAX_ITER_DEFAULT = 300
 
 # Partición temporal, sobre la hora objetivo (target_hour)
 P1_VAL_INICIO = "2026-01-01"
@@ -147,6 +150,8 @@ P2_INICIO_PRUEBA = "2026-04-01"
 P2_MES_ESTACION_NUEVA = "2026_04"
 P2_HORA_INICIO_DIA = 3
 P2_UMBRAL = 0.5
+P2_CLASS_WEIGHT_DEFAULT = "balanced"
+P2_MAX_ITER_DEFAULT = 1000
 
 P2_VARIABLES = [
     "hora_del_dia", 
@@ -189,6 +194,7 @@ P3_VARIABLES = [
     "balance_neto",
 ]
 P3_K_ELEGIDO = 4
+P3_N_INIT_DEFAULT = 10
 P3_MIN_VIAJES_ESTACION = 100
 P3_DURACION_MAX_MIN = 180
 

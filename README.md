@@ -410,54 +410,82 @@ Equivalente a ejecutar `python -m proyecto_mibici.dataset`.
 
 ### 3. Entrenar modelos por pregunta
 
-El entry point `train` recibe `pregunta` (`p1`, `p2` o `p3`) y `modelo`, además de hiperparámetros opcionales. Los valores por defecto se toman de `config.py`.
+Hay dos formas equivalentes de lanzar los entrenamientos: usando el script conjunto `run_train.py` o invocando `mlflow run` directamente sobre cada entry point `train_p1`, `train_p2`, `train_p3`. Ambos caminos quedan registrados en MLflow con `source_type=PROJECT`.
 
-#### P1 — Demanda horaria (regresión)
+#### Opción A: Ejecutar con `run_train.py` (script conjunto por pregunta)
+
+`run_train.py` es un orquestador CLI que lanza todas las versiones candidatas de una pregunta en un solo comando mediante `mlflow run`.
+
+```bash
+# Todas las versiones de P1
+python run_train.py train --pregunta p1
+
+# Solo baseline y el mejor candidato de P1
+python run_train.py train --pregunta p1 --versiones baseline,lgbm_tweedie
+
+# Todas las versiones de P2
+python run_train.py train --pregunta p2
+
+# Baseline y el mejor candidato de P2
+python run_train.py train --pregunta p2 --versiones baseline,logistic_sin_peso
+
+# Todas las versiones de P3
+python run_train.py train --pregunta p3
+
+# Baseline y el mejor candidato de P3
+python run_train.py train --pregunta p3 --versiones baseline,kmeans_k4
+```
+
+#### Opción B: Ejecutar con `mlflow run` directamente (sin `run_train.py`)
+
+Cada entry point `train_pX` puede invocarse individualmente. Los valores por defecto se toman de `config.py`.
+
+##### P1 — Demanda horaria (regresión)
 
 ```bash
 # Baseline: Regresión Lineal con medias móviles
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=baseline
+mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=baseline
 
 # Candidato: Regresión de Poisson
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=poisson -P lr=0.05 -P alpha=0.0001 -P max_iter=300
+mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=poisson -P lr=0.05 -P alpha=0.0001 -P max_iter=300
 
-# Candidato: LightGBM Poisson (búsqueda anidada)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=lgbm_p_search
+# Candidato: LightGBM Tweedie (mejor candidato, elegido para producción)
+mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_tweedie
 
-# Candidato: LightGBM Tweedie (búsqueda anidada)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=lgbm_t_search
+# Búsqueda anidada de hiperparámetros (nested runs): LightGBM Tweedie
+mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_t_search
+
+# Búsqueda anidada de hiperparámetros (nested runs): LightGBM Poisson
+mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_p_search
 ```
 
-#### P2 — Riesgo de desbalance (clasificación)
+##### P2 — Riesgo de desbalance (clasificación)
 
 ```bash
 # Línea base: persistencia ingenua
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=baseline
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=baseline
 
 # Candidato: Regresión Logística balanceada
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic -P umbral=0.5 -P class_weight=balanced -P max_iter=1000
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic -P umbral=0.5 -P class_weight=balanced -P max_iter=1000
 
-# Búsqueda anidada de hiperparámetros Logistic Regression
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic_search
+# Candidato: Regresión Logística sin peso (mejor candidato, elegido para producción)
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic -P umbral=0.5 -P class_weight=None -P max_iter=1000
 
-# Ambos (baseline + candidato + search)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos -P umbral=0.5
+# Búsqueda anidada de hiperparámetros (nested runs): Regresión Logística
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic_search
 ```
 
-#### P3 — Clustering de estaciones (no supervisado)
+##### P3 — Clustering de estaciones (no supervisado)
 
 ```bash
 # Línea base: agrupación por municipio
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=baseline
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=baseline
 
-# Búsqueda de k con nested runs (rejilla P3_GRID_KMEANS); selección por silhouette en validación
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans_search -P n_init=10
+# Candidato: KMeans K=4 (mejor candidato, elegido para producción)
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=4 -P n_init=10
 
-# Candidatas KMeans
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=3 -P n_init=10
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=4 -P n_init=10
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=5 -P n_init=10
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=6 -P n_init=10
+# Búsqueda anidada de hiperparámetros (nested runs): Búsqueda de K (k=2 a 8)
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans_search -P n_init=10
 ```
 
 ### 4. Flujo completo recomendado
@@ -472,13 +500,24 @@ export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 # 2. Ingesta de datos
 mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
 
-# 3. Entrenar P1, P2 y P3
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=baseline
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=ambos
+# 3. Entrenar P1, P2 y P3 con run_train.py (modelos elegidos para producción)
+python run_train.py train --pregunta p1 --versiones baseline,lgbm_tweedie
+python run_train.py train --pregunta p2 --versiones baseline,logistic_sin_peso
+python run_train.py train --pregunta p3 --versiones baseline,kmeans_k4
+
+# Alternativa 3: entrenar individualmente con mlflow run
+# mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_tweedie
+# mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic -P class_weight=None -P umbral=0.5
+# mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=4 -P n_init=10
+
+# Alternativa 4: búsquedas anidadas (nested runs) con mlflow run
+# mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_p_search
+# mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_t_search
+# mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic_search
+# mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans_search -P n_init=10
 ```
 
-Cada run queda registrado en MLflow con sus parámetros, métricas, etiquetas (git commit, versión de datos, equipo) y artefactos (modelo con firma, figuras, `manifest.json`).
+Cada run queda registrado en MLflow con sus parámetros, métricas, etiquetas (git commit, versión de datos, equipo) y artefactos (modelo con firma, figuras, `manifest.json`). El campo `Source` de MLflow es consistente (`source_type=PROJECT`) en todas las corridas lanzadas vía `mlflow run`.
 
 ---
 

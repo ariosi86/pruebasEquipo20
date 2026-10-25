@@ -22,8 +22,11 @@ from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_NAME,
     MODELS_DIR,
+    P1_ALPHA_DEFAULT,
     P1_FEATURES_V1,
     P1_FEATURES_V2,
+    P1_LR_DEFAULT,
+    P1_MAX_ITER_DEFAULT,
     P1_TARGET,
     P1_TEST_FIN,
     P1_TEST_INICIO,
@@ -34,7 +37,6 @@ from proyecto_mibici.config import (
     RANDOM_SEED,
     P1_LGBM_GRID_POISSON,
     P1_LGBM_GRID_TWEEDIE,
-
 )
 from proyecto_mibici.features import construir_dataset_p1
 from proyecto_mibici.modeling.model_p1 import BaselineIngenuoP1, DemandaLinealP1, DemandaPoissonP1
@@ -124,9 +126,9 @@ def registrar_fila_comparacion(filas_comparacion, nombre_modelo, m_train, m_val,
 @app.command()
 def main(
     model: str = typer.Option("baseline", "--model", "-m", help="Modelo a entrenar: 'baseline', 'poisson', 'lgbm_poisson', 'lgbm_search'"),
-    learning_rate: float = typer.Option(0.05, "--lr", help="Tasa de aprendizaje para Poisson o LightGBM."),
-    alpha: float = typer.Option(0.0001, "--alpha", help='Tasa de penalización para Poisson'),
-    max_iter: int = typer.Option(300, "--max_iter", help="Max iterations para Poisson"),
+    learning_rate: float = typer.Option(P1_LR_DEFAULT, "--lr", help="Tasa de aprendizaje para Poisson o LightGBM."),
+    alpha: float = typer.Option(P1_ALPHA_DEFAULT, "--alpha", help='Tasa de penalización para Poisson'),
+    max_iter: int = typer.Option(P1_MAX_ITER_DEFAULT, "--max_iter", help="Max iterations para Poisson"),
 ):
 
     tracker = MLFlowTracker(
@@ -220,7 +222,7 @@ def main(
     # ENTRENAR LGBM
     #-------------------------------
 
-    def entrenar_lgbm_candidato(hp: dict, nombre: str = "lgbm", extra_tags: dict = None):
+    def entrenar_lgbm_candidato(hp: dict, nombre: str = "lgbm", extra_tags: dict = None, nested: bool = False):
         logger.info(f"--- Entrenando Candidato: LightGBM {hp['objective']} ({nombre}) {hp} ---")
         modelo = lgb.LGBMRegressor(random_state=RANDOM_SEED, **hp)
         modelo.fit(df_train[P1_FEATURES_V2], y_train)
@@ -251,6 +253,7 @@ def main(
             serialization_format="cloudpickle",
             df_train=df_train,
             ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+            nested=nested,
         )
         registrar_fila_comparacion(filas_comparacion, nombre, m_train, m_val, m_test)
 
@@ -362,7 +365,10 @@ def main(
             mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "validation_mae", "objetivo": "poisson"})
 
             for i, hp in enumerate(combinaciones):
+                source_tags = tracker._get_source_tags()
                 with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    if source_tags:
+                        mlflow.set_tags(source_tags)
                     mlflow.log_params(hp)
                     logger.info(f"search_{i:02d}:{hp}")
                     try:
@@ -391,8 +397,9 @@ def main(
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
-        entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_poisson_tuned",
-                            extra_tags={"search_run_id": id_padre})
+            # Registrar el modelo final anidado bajo el padre de búsqueda
+            entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_poisson_tuned",
+                                extra_tags={"search_run_id": id_padre}, nested=True)
     # -------------------------------------------------------------
     # POISSON CANDIDATO
     # -------------------------------------------------------------      
@@ -412,7 +419,10 @@ def main(
             mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "validation_mae", "objetivo": "tweedie"})
 
             for i, hp in enumerate(combinaciones):
+                source_tags = tracker._get_source_tags()
                 with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    if source_tags:
+                        mlflow.set_tags(source_tags)
                     mlflow.log_params(hp)
                     logger.info(f"search_{i:02d}:{hp}")
                     try:
@@ -441,8 +451,9 @@ def main(
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
-        entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_tweedie_tuned",
-                            extra_tags={"search_run_id": id_padre})
+            # Registrar el modelo final anidado bajo el padre de búsqueda
+            entrenar_lgbm_candidato(mejor_hp, nombre="lgbm_tweedie_tuned",
+                                extra_tags={"search_run_id": id_padre}, nested=True)
     # -------------------------------------------------------------
     # TWEEDIE CANDIDATO
     # -------------------------------------------------------------

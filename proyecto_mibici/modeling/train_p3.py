@@ -33,6 +33,7 @@ from proyecto_mibici.config import (
     P3_GRID_KMEANS,
     P3_K_ELEGIDO,
     P3_MIN_VIAJES_ESTACION,
+    P3_N_INIT_DEFAULT,
     P3_TEST_FIN,
     P3_TEST_INICIO,
     P3_TRAIN_FIN,
@@ -84,7 +85,7 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_test: dict):
 def main(
     modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'kmeans', 'kmeans_search' o 'ambos'"),
     n_clusters: int = typer.Option(P3_K_ELEGIDO, "--n-clusters", help="Numero de clusters (P3)"),
-    n_init: int = typer.Option(10, "--n-init", help="n_init de KMeans (P3)"),
+    n_init: int = typer.Option(P3_N_INIT_DEFAULT, "--n-init", help="n_init de KMeans (P3)"),
 ):
     tracker = MLFlowTracker(
         tracking_uri=URI_MLFLOW_TRACKING,
@@ -176,7 +177,10 @@ def main(
             mlflow.set_tags(tags_busqueda)
 
             for k in valores_k:
+                source_tags = tracker._get_source_tags()
                 with mlflow.start_run(run_name=f"p3-search-k{k}", nested=True):
+                    if source_tags:
+                        mlflow.set_tags(source_tags)
                     modelo_k = ClusterKMeansP3(n_clusters=k, n_init=n_init, random_state=RANDOM_SEED)
                     modelo_k.fit(perfil_train[P3_VARIABLES])
                     m_tr = evaluar_metricas_clustering(X_train_eval, modelo_k.labels_, "Train")

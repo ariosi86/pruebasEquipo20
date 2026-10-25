@@ -22,7 +22,9 @@ from sklearn.metrics import auc, classification_report, precision_recall_curve
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_NAME,
     MODELS_DIR,
+    P2_CLASS_WEIGHT_DEFAULT,
     P2_GRID_LOGISTIC,
+    P2_MAX_ITER_DEFAULT,
     P2_OBJETIVO,
     P2_UMBRAL,
     P2_VARIABLES,
@@ -73,8 +75,8 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_val: dict, m_test: di
 def main(
     modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'logistic' o 'ambos'"),
     umbral: float = typer.Option(P2_UMBRAL, "--umbral", help="Umbral de decisión de riesgo (P2)"),
-    class_weight: str = typer.Option("balanced", "--class-weight", help="Peso de clases para Regresión Logística"),
-    max_iter: int = typer.Option(1000, "--max-iter", help="Iteraciones máximas para Regresión Logística"),
+    class_weight: str = typer.Option(P2_CLASS_WEIGHT_DEFAULT, "--class-weight", help="Peso de clases para Regresión Logística"),
+    max_iter: int = typer.Option(P2_MAX_ITER_DEFAULT, "--max-iter", help="Iteraciones máximas para Regresión Logística"),
 ):
     tracker = MLFlowTracker(
         tracking_uri=URI_MLFLOW_TRACKING,
@@ -252,7 +254,10 @@ def main(
             mlflow.log_params({"n_combinaciones": len(combinaciones), "criterio": "validation_f1", "objetivo": "logistic"})
 
             for i, hp in enumerate(combinaciones):
+                source_tags = tracker._get_source_tags()
                 with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    if source_tags:
+                        mlflow.set_tags(source_tags)
                     mlflow.log_params(hp)
                     logger.info(f"search_{i:02d}:{hp}")
                     try:
@@ -280,72 +285,73 @@ def main(
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
-        # Entrenar modelo final con mejores hiperparámetros
-        modelo_final = RiesgoLogisticoP2(
-            features=P2_VARIABLES,
-            class_weight=mejor_hp["class_weight"],
-            random_state=RANDOM_SEED,
-            max_iter=mejor_hp["max_iter"],
-            umbral=umbral,
-        )
-        modelo_final.fit(df_train[P2_VARIABLES], y_train)
+            # Entrenar modelo final con mejores hiperparámetros (anidado bajo el padre)
+            modelo_final = RiesgoLogisticoP2(
+                features=P2_VARIABLES,
+                class_weight=mejor_hp["class_weight"],
+                random_state=RANDOM_SEED,
+                max_iter=mejor_hp["max_iter"],
+                umbral=umbral,
+            )
+            modelo_final.fit(df_train[P2_VARIABLES], y_train)
 
-        pred_train_log = modelo_final.predict(df_train[P2_VARIABLES])
-        prob_train_log = modelo_final.predict_proba(df_train[P2_VARIABLES])[:, 1]
-        m_log_train = extraer_metricas_clasificacion(y_train, pred_train_log, prob_train_log, "Train")
+            pred_train_log = modelo_final.predict(df_train[P2_VARIABLES])
+            prob_train_log = modelo_final.predict_proba(df_train[P2_VARIABLES])[:, 1]
+            m_log_train = extraer_metricas_clasificacion(y_train, pred_train_log, prob_train_log, "Train")
 
-        pred_val_log = modelo_final.predict(df_val[P2_VARIABLES])
-        prob_val_log = modelo_final.predict_proba(df_val[P2_VARIABLES])[:, 1]
-        m_log_val = extraer_metricas_clasificacion(y_val, pred_val_log, prob_val_log, "Validación")
+            pred_val_log = modelo_final.predict(df_val[P2_VARIABLES])
+            prob_val_log = modelo_final.predict_proba(df_val[P2_VARIABLES])[:, 1]
+            m_log_val = extraer_metricas_clasificacion(y_val, pred_val_log, prob_val_log, "Validación")
 
-        pred_test_log = modelo_final.predict(df_test[P2_VARIABLES])
-        prob_test_log = modelo_final.predict_proba(df_test[P2_VARIABLES])[:, 1]
-        m_log_test = extraer_metricas_clasificacion(y_test, pred_test_log, prob_test_log, "Test")
+            pred_test_log = modelo_final.predict(df_test[P2_VARIABLES])
+            prob_test_log = modelo_final.predict_proba(df_test[P2_VARIABLES])[:, 1]
+            m_log_test = extraer_metricas_clasificacion(y_test, pred_test_log, prob_test_log, "Test")
 
-        df_predicciones["prob_riesgo_search"] = np.round(prob_test_log, 4)
-        df_predicciones["pred_riesgo_search"] = pred_test_log.astype(int)
+            df_predicciones["prob_riesgo_search"] = np.round(prob_test_log, 4)
+            df_predicciones["pred_riesgo_search"] = pred_test_log.astype(int)
 
-        imprimir_metricas_modelo("logistic_search_tuned", m_log_train, m_log_val, m_log_test)
+            imprimir_metricas_modelo("logistic_search_tuned", m_log_train, m_log_val, m_log_test)
 
-        figuras = figuras_p2(y_test, pred_test_log, prob_test_log, "logistic_search_tuned")
-        estimador_log = getattr(modelo_final, "estimator_", modelo_final)
+            figuras = figuras_p2(y_test, pred_test_log, prob_test_log, "logistic_search_tuned")
+            estimador_log = getattr(modelo_final, "estimator_", modelo_final)
 
-        tracker.registrar_run(
-            run_name="p2-logistic-search-tuned",
-            params={
-                **params_base,
-                "modelo": "LogisticRegression_Search",
-                "variables_predictoras": ", ".join(P2_VARIABLES),
-                "class_weight": mejor_hp["class_weight"],
-                "max_iter": mejor_hp["max_iter"],
-                "umbral": umbral,
-            },
-            tags={
-                **tags_base,
-                "version": "logistic_search_tuned",
-                "question": "P2",
-                "model_family": "logistic_regression",
-                "stage_of_work": "candidate",
-                "search_run_id": id_padre,
-            },
-            tabla=pd.DataFrame([m_log_train, m_log_val, m_log_test]),
-            tabla_est=pd.DataFrame(),
-            modelo=estimador_log,
-            X_ejemplo=df_train[P2_VARIABLES].head(5),
-            figuras=figuras,
-            df_train=df_train[P2_VARIABLES],
-            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
-        )
+            tracker.registrar_run(
+                run_name="p2-logistic-search-tuned",
+                params={
+                    **params_base,
+                    "modelo": "LogisticRegression_Search",
+                    "variables_predictoras": ", ".join(P2_VARIABLES),
+                    "class_weight": mejor_hp["class_weight"],
+                    "max_iter": mejor_hp["max_iter"],
+                    "umbral": umbral,
+                },
+                tags={
+                    **tags_base,
+                    "version": "logistic_search_tuned",
+                    "question": "P2",
+                    "model_family": "logistic_regression",
+                    "stage_of_work": "candidate",
+                    "search_run_id": id_padre,
+                },
+                tabla=pd.DataFrame([m_log_train, m_log_val, m_log_test]),
+                tabla_est=pd.DataFrame(),
+                modelo=estimador_log,
+                X_ejemplo=df_train[P2_VARIABLES].head(5),
+                figuras=figuras,
+                df_train=df_train[P2_VARIABLES],
+                ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+                nested=True,
+            )
 
-        filas_comparacion.append({
-            "modelo": "logistic_search_tuned",
-            "train_f1": m_log_train["f1_score"],
-            "val_f1": m_log_val["f1_score"],
-            "test_precision": m_log_test["precision"],
-            "test_recall": m_log_test["recall"],
-            "test_f1": m_log_test["f1_score"],
-            "test_pr_auc": m_log_test["pr_auc"],
-        })
+            filas_comparacion.append({
+                "modelo": "logistic_search_tuned",
+                "train_f1": m_log_train["f1_score"],
+                "val_f1": m_log_val["f1_score"],
+                "test_precision": m_log_test["precision"],
+                "test_recall": m_log_test["recall"],
+                "test_f1": m_log_test["f1_score"],
+                "test_pr_auc": m_log_test["pr_auc"],
+            })
 
     # -------------------------------------------------------------
     # 4. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)

@@ -17,7 +17,19 @@ import sys
 
 import typer
 
-from proyecto_mibici.config import MLFLOW_EXPERIMENT_NAME, P2_UMBRAL, URI_MLFLOW_TRACKING
+from proyecto_mibici.config import (
+    MLFLOW_EXPERIMENT_NAME,
+    P1_ALPHA_DEFAULT,
+    P1_LR_DEFAULT,
+    P1_MAX_ITER_DEFAULT,
+    P2_CLASS_WEIGHT_DEFAULT,
+    P2_UMBRAL,
+    P2_MAX_ITER_DEFAULT,
+    P3_K_ELEGIDO,
+    P3_N_INIT_DEFAULT,
+    RANDOM_SEED,
+    URI_MLFLOW_TRACKING,
+)
 
 app = typer.Typer(help="Orquestador de entrenamientos MLflow Projects (P1/P2/P3).")
 
@@ -122,13 +134,13 @@ def train(
 def exec_single(
     pregunta: str = typer.Option(..., "--pregunta", help="p1, p2 o p3"),
     modelo: str = typer.Option("baseline", help="Nombre del modelo a entrenar."),
-    lr: float = typer.Option(0.05, help="Tasa de aprendizaje (P1)."),
-    alpha: float = typer.Option(0.0001, help="Regularización (P1 Poisson)."),
-    max_iter: int = typer.Option(300, help="Iteraciones máximas (P1 Poisson / P2 Logistic)."),
-    umbral: float = typer.Option(0.5, help="Umbral de decisión de riesgo (P2)."),
-    class_weight: str = typer.Option("balanced", help="Peso de clases para Regresión Logística (P2)."),
-    n_clusters: int = typer.Option(4, help="Numero de clusters (P3)."),
-    n_init: int = typer.Option(10, help="n_init de KMeans (P3)."),
+    lr: float = typer.Option(P1_LR_DEFAULT, help="Tasa de aprendizaje (P1)."),
+    alpha: float = typer.Option(P1_ALPHA_DEFAULT, help="Regularización (P1 Poisson)."),
+    max_iter: int = typer.Option(P1_MAX_ITER_DEFAULT, help="Iteraciones máximas (P1 Poisson / P2 Logistic)."),
+    umbral: float = typer.Option(P2_UMBRAL, help="Umbral de decisión de riesgo (P2)."),
+    class_weight: str = typer.Option(P2_CLASS_WEIGHT_DEFAULT, help="Peso de clases para Regresión Logística (P2)."),
+    n_clusters: int = typer.Option(P3_K_ELEGIDO, help="Numero de clusters (P3)."),
+    n_init: int = typer.Option(P3_N_INIT_DEFAULT, help="n_init de KMeans (P3)."),
 ):
     """
     Ejecuta una sola versión directamente (sin mlflow run).
