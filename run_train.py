@@ -54,6 +54,7 @@ VERSIONES_P1 = [
     ("lgbm_poisson", "lgbm_poisson", [], "train_p1"),
     ("lgbm_poisson_search", "lgbm_p_search", [], "train_p1"),
     ("lgbm_tweedie", "lgbm_tweedie", [], "train_p1"),
+    ("lgbm_tweedie_search", "lgbm_t_search", [], "train_p1"),
 ]
 
 VERSIONES_P2 = [
