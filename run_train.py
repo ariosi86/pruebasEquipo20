@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Orquestador de entrenamientos para MiBici (P1/P2/P3).
+Orquestador de entrenamientos MLflow Projects para MiBici (P1/P2/P3).
 
-Atajo para ejecutar todas las versiones candidatas de una pregunta en un solo
-comando, en lugar de lanzarlas una a una. Cada versión tiene sus
+Atajo para lanzar con ``mlflow run`` todas las versiones candidatas de una
+pregunta en un solo comando, en lugar de lanzarlas una a una. Cada versión tiene sus
 hiperparámetros hardcodeados.
 
 No recibe parámetros de ejecución sueltos: solo elige la pregunta y, opcional,
@@ -17,32 +17,30 @@ import sys
 
 import typer
 
-from proyecto_mibici.config import P2_UMBRAL, P3_K_ELEGIDO
+from proyecto_mibici.config import MLFLOW_EXPERIMENT_NAME, P2_UMBRAL, URI_MLFLOW_TRACKING
 
-app = typer.Typer(help="Orquestador de entrenamientos (P1/P2/P3).")
+app = typer.Typer(help="Orquestador de entrenamientos MLflow Projects (P1/P2/P3).")
 
 
 def _ejecutar(cmd: list[str], etiqueta: str) -> None:
     typer.secho(f"[Entrenamiento] {etiqueta}", fg=typer.colors.CYAN, bold=True)
     typer.echo(f"  $ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, env=os.environ.copy())
+    env = os.environ.copy()
+    # mlflow run crea la corrida antes de lanzar el script; ambos deben usar el mismo servidor
+    env.setdefault("MLFLOW_TRACKING_URI", URI_MLFLOW_TRACKING)
+    subprocess.run(cmd, check=True, env=env)
 
 
-# Mapeo de entry_point de MLproject a (modulo, argumento_cli) para ejecución directa
-ENTRY_POINT_MAP = {
-    "train_p1": ("proyecto_mibici.modeling.train_p1", "--model"),
-    "train_p2": ("proyecto_mibici.modeling.train_p2", "--modelo"),
-    "train_p3": ("proyecto_mibici.modeling.train_p3", "--modelo"),
-}
-
-
-def _direct_run_cmd(entry_point: str, modelo: str, extra_params: list[str]) -> list[str]:
-    """Construye el comando python -m para una versión dada, sin depender de mlflow run."""
-    modulo, modelo_cli = ENTRY_POINT_MAP[entry_point]
-    cmd = [sys.executable, "-m", modulo, modelo_cli, modelo]
+def _mlflow_run_cmd(entry_point: str, extra_params: list[str]) -> list[str]:
+    """Construye el comando mlflow run para una versión dada."""
+    cmd = [
+        "mlflow", "run", ".", "-e", entry_point,
+        "--env-manager", "local",
+        "--experiment-name", MLFLOW_EXPERIMENT_NAME,
+    ]
     for param in extra_params:
         clave, valor = param.split("=", 1)
-        cmd += [f"--{clave}", valor]
+        cmd += ["-P", f"{clave}={valor}"]
     return cmd
 
 
@@ -115,7 +113,7 @@ def train(
         entry_point = "train_p3"
 
     for nombre, modelo, extra, _ep in versiones_list:
-        cmd = _direct_run_cmd(entry_point, modelo, extra)
+        cmd = _mlflow_run_cmd(entry_point, ["modelo=" + modelo] + extra)
         _ejecutar(cmd, f"{p.upper()} - {nombre} ({modelo})")
 
 
