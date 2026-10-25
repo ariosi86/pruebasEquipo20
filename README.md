@@ -9,7 +9,7 @@ Solución integral de Machine Learning para el análisis, modelado predictivo y 
 | Pregunta | Tipo de Problema | Objetivo de Negocio / Técnico | Algoritmo y Pipeline |
 |---|---|---|---|
 | **P1** | Regresión Temporal | Estimar el volumen de demanda horaria de viajes por estación para la hora inmediata ($t+1$). | `StandardScaler` + `LinearRegression` con cota inferior recortada en $\ge 0$. |
-| **P2** | Clasificación Binaria | Predecir si una estación entrará en estado de desbalance crítico (vacía o saturada) en $t+1$. | `StandardScaler` + `LogisticRegression` balanceada con umbral de decisión operativo calibrable. |
+| **P2** | Clasificación Binaria | Predecir si una estación entrará en estado de desbalance crítico (vacía o saturada) en $t+1$. | Baseline de persistencia; candidatos `LogisticRegression` y `HistGradientBoostingClassifier` (elegido), con umbral de decisión 0.5. |
 | **P3** | Clustering No Supervisado | Identificar perfiles funcionales de uso en estaciones y contrastar el agrupamiento contra la división municipal (línea base). | `StandardScaler` + `KMeans` ($K=4$) evaluado con coeficientes de Silhouette y Davies-Bouldin. |
 
 ---
@@ -438,11 +438,17 @@ mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P p
 # Candidato: Regresión Logística balanceada
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic -P umbral=0.5 -P class_weight=balanced -P max_iter=1000
 
-# Búsqueda anidada de hiperparámetros Logistic Regression
+# Búsqueda anidada de hiperparámetros de la Regresión Logística
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic_search
 
-# Ambos (baseline + candidato + search)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos -P umbral=0.5
+# Candidato elegido: Gradient boosting (HistGradientBoostingClassifier)
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=gbm
+
+# Búsqueda anidada de hiperparámetros del gradient boosting
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=gbm_search
+
+# Baseline + Regresión Logística en una sola corrida
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos -P umbral=0.5 -P max_iter=1000
 ```
 
 #### P3 — Clustering de estaciones (no supervisado)
@@ -475,7 +481,8 @@ mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
 
 # 3. Entrenar P1, P2 y P3
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=baseline
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos -P max_iter=1000
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=gbm
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=ambos
 ```
 
@@ -542,17 +549,33 @@ En la interfaz de MLflow (`http://127.0.0.1:5000`) verás el run padre con sus r
 | `logistic_sin_peso` | `logistic` | `umbral=0.5`, `class_weight=None`, `max_iter=1000` | `train_p2` |
 | `logistic_umbral_sensible` | `logistic` | `umbral=0.3`, `class_weight=balanced`, `max_iter=1000` | `train_p2` |
 | `logistic_search` | `logistic_search` | (ninguno) | `train_p2` |
+| `gbm` | `gbm` | (ninguno; valores en `P2_GBM_PARAMS` de `config.py`) | `train_p2` |
+| `gbm_search` | `gbm_search` | (ninguno) | `train_p2` |
+
+Etiquetas de cada versión de P2:
+
+| Versión | `model_family` | `stage_of_work` | Extra |
+|---------|----------------|-----------------|-------|
+| `baseline` | `naive` | `baseline` | |
+| `logistic_*` | `logistic_regression` | `candidate` | |
+| `logistic_search` | `logistic_regression` | `search` (padre e hijas); `candidate` (modelo final) | `search_run_id` en el modelo final |
+| `gbm` | `hist_gradient_boosting` | `candidate` | |
+| `gbm_search` | `hist_gradient_boosting` | `search` (padre e hijas); `candidate` (modelo final) | `search_run_id` en el modelo final |
+
+Los hiperparámetros de los candidatos se registran con prefijo (`logistic_*`, `gbm_*`) y el algoritmo como `modelo_clase`, porque `tracking.py` no vuelve a registrar los parámetros que `mlflow run` ya anotó desde `-P`. PR-AUC se calcula como *average precision* (`average_precision_score`).
 
 #### Búsquedas con nested runs (P2)
 
 | Versión | Modelo | Qué hace | Estructura en MLflow |
 |---------|--------|----------|----------------------|
-| `logistic_search` | `logistic_search` | Grid search sobre `P2_GRID_LOGISTIC` (C, max_iter, class_weight). Evalúa cada combinación en Validación y elige el mejor F1. | Run padre `P2_logistic_search` + runs hijas `search_00`, `search_01`, … (`nested=True`). |
+| `logistic_search` | `logistic_search` | Grid search sobre `P2_GRID_LOGISTIC` (`C`, `max_iter`, `class_weight`; 16 combinaciones). Evalúa cada combinación en Validación y elige el mejor F1. El modelo final se entrena con todos los hiperparámetros ganadores. | Run padre `P2_logistic_search` + runs hijas `search_00` … `search_15` (`nested=True`); modelo final `p2-logistic-search-tuned`. |
+| `gbm_search` | `gbm_search` | Grid search sobre `P2_GBM_GRID` (`learning_rate`, `max_leaf_nodes`, `min_samples_leaf`; 8 combinaciones, con `max_iter=500` como tope y *early stopping*). Evalúa cada combinación en Validación y elige el mejor PR-AUC. | Run padre `P2_gbm_search` + runs hijas `search_00` … `search_07` (`nested=True`); modelo final `p2-gbm-tuned`. |
 
-**Ejecutar búsqueda anidada P2:**
+**Ejecutar las búsquedas anidadas de P2:**
 
 ```bash
 python run_train.py train --pregunta p2 --versiones logistic_search
+python run_train.py train --pregunta p2 --versiones gbm_search
 ```
 
 **P3 — Clustering de estaciones (No supervisado)**
@@ -591,7 +614,7 @@ python run_train.py train --pregunta p1 --versiones baseline,lgbm_tweedie
 python run_train.py train --pregunta p2
 
 # Baseline y el mejor candidato de P2
-python run_train.py train --pregunta p2 --versiones baseline,logistic_sin_peso
+python run_train.py train --pregunta p2 --versiones baseline,gbm
 
 # Todas las versiones de P3
 python run_train.py train --pregunta p3
@@ -618,6 +641,8 @@ mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -
 mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic -P umbral=0.5 -P class_weight=None -P max_iter=1000
 mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic -P umbral=0.3 -P class_weight=balanced -P max_iter=1000
 mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=logistic_search
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=gbm
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=gbm_search
 ```
 
 **P3 — Clustering de estaciones**
@@ -653,7 +678,7 @@ mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./
 | Pregunta | Nombre en el Registry | Modelo elegido |
 |----------|----------------------|----------------|
 | P1 | `mibici-equipo20-p1-demanda` | LightGBM Regresión Tweedie |
-| P2 | `mibici-equipo20-p2-riesgo` | Regresión Logística sin peso, umbral 0.5 |
+| P2 | `mibici-equipo20-p2-riesgo` | Gradient boosting (`HistGradientBoostingClassifier`), umbral 0.5 |
 | P3 | `mibici-equipo20-p3-grupos` | KMeans funcional K=4 |
 
 Cada versión conserva su linaje: experimento (`mibici-equipo20`), corrida de origen (`run_origen`), commit de Git y versión de datos (`datos_version`). Todas se promueven al alias/stage `Production`.

@@ -146,26 +146,46 @@ P2_INICIO_VALIDACION = "2026-01-01"
 P2_INICIO_PRUEBA = "2026-04-01"
 P2_MES_ESTACION_NUEVA = "2026_04"
 P2_HORA_INICIO_DIA = 3
+
+# Umbral de capacidad: define el riesgo (±50 % de la capacidad). Lo usa features_p2.py.
 P2_UMBRAL = 0.5
+# Umbral de decisión: probabilidad a partir de la cual el modelo predice "en riesgo".
+P2_UMBRAL_DECISION = 0.5
 
 P2_VARIABLES = [
-    "hora_del_dia", 
-    "dia_semana", 
-    "fin_de_semana", 
+    "hora_del_dia",
+    "dia_semana",
+    "fin_de_semana",
     "capacidad",
-    "salidas", 
-    "llegadas", 
-    "balance_acumulado_dia", 
+    "salidas",
+    "llegadas",
+    "balance_acumulado_dia",
     "acumulado_relativo",
-    "balance_ult_3h_relativo", 
-    "riesgo_vacia", 
-    "riesgo_llena", 
+    "balance_ult_3h_relativo",
+    "riesgo_vacia",
+    "riesgo_llena",
     "en_riesgo",
 ]
 P2_OBJETIVO = "en_riesgo_siguiente"
 
-P2_MODEL_TYPE = "LogisticRegression" # o "RandomForestClassifier", etc.
-P2_RANDOM_STATE = 42
+# Candidato gbm: HistGradientBoostingClassifier con los valores por defecto
+# de scikit-learn, como en la semana 5.
+P2_GBM_PARAMS = {
+    "learning_rate": 0.1,
+    "max_iter": 100,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 20,
+}
+
+# Búsqueda con nested runs sobre el gbm (criterio: PR-AUC de validación).
+# 2 x 2 x 2 = 8 combinaciones. max_iter es un tope: el modelo se detiene
+# antes si deja de mejorar (early stopping automático de scikit-learn).
+P2_GBM_GRID = {
+    "learning_rate": [0.05, 0.1],
+    "max_leaf_nodes": [31, 63],
+    "min_samples_leaf": [20, 100],
+    "max_iter": [500],
+}
 
 
 # ==========================================

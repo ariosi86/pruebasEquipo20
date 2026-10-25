@@ -17,7 +17,7 @@ import sys
 
 import typer
 
-from proyecto_mibici.config import MLFLOW_EXPERIMENT_NAME, P2_UMBRAL, URI_MLFLOW_TRACKING
+from proyecto_mibici.config import MLFLOW_EXPERIMENT_NAME, P2_UMBRAL_DECISION, URI_MLFLOW_TRACKING
 
 app = typer.Typer(help="Orquestador de entrenamientos MLflow Projects (P1/P2/P3).")
 
@@ -57,12 +57,15 @@ VERSIONES_P1 = [
     ("lgbm_tweedie_search", "lgbm_t_search", [], "train_p1"),
 ]
 
+# Los parámetros van con -P y usan los nombres del MLproject (class_weight, max_iter).
 VERSIONES_P2 = [
     ("baseline", "baseline", [], "train_p2"),
-    ("logistic_balanced", "logistic", [f"umbral={P2_UMBRAL}", "class_weight=balanced", "max_iter=1000"], "train_p2"),
-    ("logistic_sin_peso", "logistic", [f"umbral={P2_UMBRAL}", "class_weight=None", "max_iter=1000"], "train_p2"),
+    ("logistic_balanced", "logistic", [f"umbral={P2_UMBRAL_DECISION}", "class_weight=balanced", "max_iter=1000"], "train_p2"),
+    ("logistic_sin_peso", "logistic", [f"umbral={P2_UMBRAL_DECISION}", "class_weight=None", "max_iter=1000"], "train_p2"),
     ("logistic_umbral_sensible", "logistic", ["umbral=0.3", "class_weight=balanced", "max_iter=1000"], "train_p2"),
     ("logistic_search", "logistic_search", [], "train_p2"),
+    ("gbm", "gbm", [], "train_p2"),
+    ("gbm_search", "gbm_search", [], "train_p2"),
 ]
 
 VERSIONES_P3 = [
