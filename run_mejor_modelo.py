@@ -46,8 +46,11 @@ MODELOS_A_REGISTRAR = [
         "metrica_test": "test_mae",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P1"
-            and (tags.get("version") == "lgbm_tweedie"
-                 or "tweedie" in str(params.get("modelo", "")).lower())
+            and (
+                tags.get("version") == "lgbm_tweedie_tuned"
+                or tags.get("version") == "lgbm_tweedie"
+                or "tweedie" in str(params.get("modelo", "")).lower()
+            )
         ),
     },
     {
