@@ -71,6 +71,22 @@ MODELOS_A_REGISTRAR = [
         ),
     },
     {
+        "name": "mibici-equipo20-p2-riesgo-gbm",
+        "pregunta": "P2",
+        "descripcion": (
+            "Modelo de produccion para P2 (riesgo de desbalance de estacion). "
+            "HistGradientBoostingClassifier (Gradient Boosting) con early stopping, "
+            "optimizado por PR-AUC en validacion via nested runs. "
+            "Variables de riesgo P2. Seleccionado por mejor Test PR-AUC y F1 "
+            "frente a Regresion Logistica."
+        ),
+        "metrica_test": "test_pr_auc",
+        "predicado": lambda tags, params, metrics: (
+            tags.get("question") == "P2"
+            and "histgradientboosting" in str(params.get("modelo", "")).lower()
+        ),
+    },
+    {
         "name": "mibici-equipo20-p3-grupos",
         "pregunta": "P3",
         "descripcion": (

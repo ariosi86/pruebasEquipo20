@@ -153,6 +153,27 @@ P2_UMBRAL = 0.5
 P2_CLASS_WEIGHT_DEFAULT = "balanced"
 P2_MAX_ITER_DEFAULT = 1000
 
+# GBM (HistGradientBoostingClassifier) - Candidato alternativo para P2
+P2_GBM_PARAMS = {
+    "learning_rate": 0.1,
+    "max_iter": 100,
+    "max_leaf_nodes": 31,
+    "min_samples_leaf": 20,
+    "early_stopping": True,
+    "validation_fraction": 0.1,
+    "random_state": 42,
+}
+
+# Búsqueda con nested runs sobre el GBM (criterio: PR-AUC de validación).
+# 2 x 2 x 2 = 8 combinaciones. max_iter es un tope: el modelo se detiene
+# antes si deja de mejorar (early stopping automático de scikit-learn).
+P2_GBM_GRID = {
+    "learning_rate": [0.05, 0.1],
+    "max_leaf_nodes": [31, 63],
+    "min_samples_leaf": [20, 100],
+    "max_iter": [500],
+}
+
 P2_VARIABLES = [
     "hora_del_dia", 
     "dia_semana", 
