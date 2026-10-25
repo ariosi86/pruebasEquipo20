@@ -390,7 +390,13 @@ Desde la raíz del repositorio, con el entorno virtual activado:
 mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
 ```
 
-La URI de seguimiento se declara en `MLproject` como `MLFLOW_TRACKING_URI = sqlite:///mlflow.db` y también está en `config.py` (`URI_MLFLOW_TRACKING`). Accede a la interfaz en `http://localhost:5000`.
+Accede a la interfaz en `http://localhost:5000`. En la terminal donde vas a lanzar `mlflow run`, define la URI del servidor:
+
+```bash
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+```
+
+`mlflow run` crea la corrida antes de ejecutar el script y necesita saber en qué servidor hacerlo; MLflow no lee la sección `variables` del `MLproject`. Los scripts usan la misma URI desde `config.py` (`URI_MLFLOW_TRACKING`). Los hiperparámetros siempre van como `-P clave=valor`.
 
 ### 2. Reproducir la ingesta de datos
 
@@ -413,7 +419,7 @@ El entry point `train` recibe `pregunta` (`p1`, `p2` o `p3`) y `modelo`, además
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=baseline
 
 # Candidato: Regresión de Poisson
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=poisson --lr 0.05 --alpha 0.0001 --max-iter 300
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=poisson -P lr=0.05 -P alpha=0.0001 -P max_iter=300
 
 # Candidato: LightGBM Poisson (búsqueda anidada)
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p1 -P modelo=lgbm_p_search
@@ -429,13 +435,13 @@ mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P p
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=baseline
 
 # Candidato: Regresión Logística balanceada
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic --umbral 0.5 --class-weight balanced --max-iter 1000
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic -P umbral=0.5 -P class_weight=balanced -P max_iter=1000
 
 # Búsqueda anidada de hiperparámetros Logistic Regression
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=logistic_search
 
 # Ambos (baseline + candidato + search)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos --umbral 0.5
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p2 -P modelo=ambos -P umbral=0.5
 ```
 
 #### P3 — Clustering de estaciones (no supervisado)
@@ -444,14 +450,14 @@ mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P p
 # Línea base: agrupación por municipio
 mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=baseline
 
-# Candidato: KMeans funcional
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans --n-clusters 4 --n-init 10
+# Búsqueda de k con nested runs (rejilla P3_GRID_KMEANS); selección por silhouette en validación
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans_search -P n_init=10
 
-# Búsqueda anidada de hiperparámetros KMeans
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans_search
-
-# Ambos (baseline + candidato + search)
-mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=ambos --n-clusters 4 --n-init 10
+# Candidatas KMeans
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=3 -P n_init=10
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=4 -P n_init=10
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=5 -P n_init=10
+mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P pregunta=p3 -P modelo=kmeans -P n_clusters=6 -P n_init=10
 ```
 
 ### 4. Flujo completo recomendado
@@ -459,6 +465,9 @@ mlflow run . -e train --env-manager local --experiment-name mibici-equipo20 -P p
 ```bash
 # 1. Levantar MLflow (terminal aparte)
 mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+
+# En la terminal de trabajo
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 
 # 2. Ingesta de datos
 mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
@@ -550,17 +559,17 @@ python run_train.py train --pregunta p2 --versiones logistic_search
 | Versión | Modelo (`--modelo`) | Hiperparámetros (`-P`) | Entry point |
 |---------|---------------------|------------------------|-------------|
 | `baseline` | `baseline` | (ninguno) | `train_p3` |
+| `kmeans_search` | `kmeans_search` | `n_init=10` | `train_p3` |
 | `kmeans_k3` | `kmeans` | `n_clusters=3`, `n_init=10` | `train_p3` |
 | `kmeans_k4` | `kmeans` | `n_clusters=4`, `n_init=10` | `train_p3` |
 | `kmeans_k5` | `kmeans` | `n_clusters=5`, `n_init=10` | `train_p3` |
 | `kmeans_k6` | `kmeans` | `n_clusters=6`, `n_init=10` | `train_p3` |
-| `kmeans_search` | `kmeans_search` | (ninguno) | `train_p3` |
 
 #### Búsquedas con nested runs (P3)
 
 | Versión | Modelo | Qué hace | Estructura en MLflow |
 |---------|--------|----------|----------------------|
-| `kmeans_search` | `kmeans_search` | Grid search sobre `P3_GRID_KMEANS` (n_clusters, n_init). Evalúa cada combinación en Test y elige el mejor Silhouette. | Run padre `P3_kmeans_search` + runs hijas `search_00`, `search_01`, … (`nested=True`). |
+| `kmeans_search` | `kmeans_search` | Búsqueda de k sobre `P3_GRID_KMEANS["n_clusters"]` (2 a 8). Evalúa cada k en Validación (enero-abril 2026) y elige el mejor silhouette; prueba no se usa en la búsqueda. | Run padre `p3-kmeans-search` (registra `mejor_k`) + runs hijas `p3-search-k2` … `p3-search-k8` (`nested=True`). |
 
 **Ejecutar búsqueda anidada P3:**
 
@@ -616,7 +625,7 @@ mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -
 mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=4 -P n_init=10
 mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=5 -P n_init=10
 mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=6 -P n_init=10
-mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans_search
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans_search -P n_init=10
 ```
 
 #### Requisitos previos

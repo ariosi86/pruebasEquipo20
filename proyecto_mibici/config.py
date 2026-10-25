@@ -166,6 +166,8 @@ P2_RANDOM_STATE = 42
 # ==========================================
 P3_TRAIN_INICIO = "2025-01-01"
 P3_TRAIN_FIN = "2026-01-01"
+P3_VAL_INICIO = "2026-01-01"
+P3_VAL_FIN = "2026-05-01"
 P3_TEST_INICIO = "2026-05-01"
 P3_TEST_FIN = "2026-10-01"
 
@@ -192,7 +194,8 @@ P2_GRID_LOGISTIC = {
     "class_weight": [None, "balanced"],
 }
 
+# Búsqueda de k en P3: se elige con el silhouette de validación (train_p3 --modelo kmeans_search)
 P3_GRID_KMEANS = {
-    "n_clusters": [3, 4, 5, 6],
+    "n_clusters": [2, 3, 4, 5, 6, 7, 8],
     "n_init": [10],
 }
