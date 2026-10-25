@@ -4,22 +4,32 @@
 Script de entrenamiento, evaluación y registro en MLflow para P2 (Riesgo de Desbalance).
 Integra y evalúa en Train, Validación y Test:
   - Baseline de Persistencia (inercia operativa)
-  - Modelo Candidato: Regresión Logística Balanceada
+  - Candidato: Regresión Logística (variantes de peso de clases y umbral)
+  - Candidato: Gradient Boosting (HistGradientBoostingClassifier), como en la semana 5
+  - Búsqueda de hiperparámetros del gradient boosting con nested runs (gbm_search),
+    seguida del candidato final con los mejores valores (gbm_tuned)
 Exporta métricas a reports/p2_comparacion.parquet y predicciones a reports/p2_predicciones_modelos.parquet.
 """
 
-from pathlib import Path
+import itertools
+import time
+
+import mlflow
 import numpy as np
 import pandas as pd
 import typer
 from loguru import logger
-from sklearn.metrics import auc, classification_report, precision_recall_curve
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.metrics import average_precision_score, classification_report
 
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_NAME,
     MODELS_DIR,
+    P2_GBM_GRID,
+    P2_GBM_PARAMS,
     P2_OBJETIVO,
     P2_UMBRAL,
+    P2_UMBRAL_DECISION,
     P2_VARIABLES,
     RANDOM_SEED,
     REPORTS_DIR,
@@ -33,24 +43,28 @@ from proyecto_mibici.plots import figuras_p2
 
 app = typer.Typer()
 
+MODELOS_VALIDOS = ("baseline", "naive", "logistic", "logistica", "ambos", "gbm", "gbm_search")
+
 
 def extraer_metricas_clasificacion(y_real, y_pred, y_prob, conjunto_nombre: str) -> dict:
-    """Calcula precision, recall, f1-score y PR-AUC para la clase de riesgo (positiva)."""
+    """Calcula precision, recall, f1-score y PR-AUC para la clase de riesgo (positiva).
+
+    PR-AUC se calcula como average precision (average_precision_score), igual que en
+    la semana 5. No usa interpolación lineal, que sobreestima el área en modelos con
+    pocas probabilidades distintas, como la persistencia.
+    """
     y_real = np.asarray(y_real, dtype=bool)
     y_pred = np.asarray(y_pred, dtype=bool)
 
     rep = classification_report(y_real, y_pred, output_dict=True, zero_division=0)
     pos_key = True if True in rep else "True"
 
-    precision_curve, recall_curve, _ = precision_recall_curve(y_real, y_prob)
-    pr_auc_val = float(auc(recall_curve, precision_curve))
-
     return {
         "conjunto": conjunto_nombre,
         "precision": float(rep[pos_key]["precision"]),
         "recall": float(rep[pos_key]["recall"]),
         "f1_score": float(rep[pos_key]["f1-score"]),
-        "pr_auc": pr_auc_val,
+        "pr_auc": float(average_precision_score(y_real, y_prob)),
     }
 
 
@@ -66,11 +80,21 @@ def imprimir_metricas_modelo(nombre: str, m_train: dict, m_val: dict, m_test: di
 
 @app.command()
 def main(
-    modelo: str = typer.Option("ambos", "--modelo", help="Modelo a entrenar: 'baseline', 'logistic' o 'ambos'"),
-    umbral: float = typer.Option(P2_UMBRAL, "--umbral", help="Umbral de decisión de riesgo (P2)"),
+    modelo: str = typer.Option(
+        "ambos", "--modelo",
+        help="Modelo a entrenar: 'baseline', 'logistic', 'ambos', 'gbm' o 'gbm_search'",
+    ),
+    umbral: float = typer.Option(
+        P2_UMBRAL_DECISION, "--umbral",
+        help="Umbral de decisión: probabilidad a partir de la cual se predice riesgo (P2)",
+    ),
     class_weight: str = typer.Option("balanced", "--class-weight", help="Peso de clases para Regresión Logística"),
     max_iter: int = typer.Option(1000, "--max-iter", help="Iteraciones máximas para Regresión Logística"),
 ):
+    modelo = modelo.lower()
+    if modelo not in MODELOS_VALIDOS:
+        raise typer.BadParameter(f"Modelo desconocido: '{modelo}'. Opciones: {', '.join(MODELOS_VALIDOS)}")
+
     tracker = MLFlowTracker(
         tracking_uri=URI_MLFLOW_TRACKING,
         experiment_name=MLFLOW_EXPERIMENT_NAME,
@@ -99,7 +123,11 @@ def main(
     params_base, tags_base = tracker.armar_params_tags(
         "P2",
         splits,
-        extra_params={"variable_objetivo": P2_OBJETIVO, "umbral_capacidad": umbral},
+        extra_params={
+            "variable_objetivo": P2_OBJETIVO,
+            "umbral_capacidad": P2_UMBRAL,
+            "umbral_decision": umbral,
+        },
         col_tiempo="hora",
     )
 
@@ -111,7 +139,7 @@ def main(
     # -------------------------------------------------------------
     # 1. EVALUACIÓN DE LÍNEA BASE (PERSISTENCIA INGENUA)
     # -------------------------------------------------------------
-    if modelo.lower() in ("baseline", "naive", "ambos"):
+    if modelo in ("baseline", "naive", "ambos"):
         logger.info("--- Evaluando Línea Base Ingenua: Persistencia ---")
         modelo_naive = BaselinePersistenciaP2(col_persistencia="en_riesgo")
 
@@ -161,9 +189,9 @@ def main(
         })
 
     # -------------------------------------------------------------
-    # 2. MODELO CANDIDATO: REGRESIÓN LOGÍSTICA BALANCEADA
+    # 2. CANDIDATO: REGRESIÓN LOGÍSTICA
     # -------------------------------------------------------------
-    if modelo.lower() in ("logistic", "logistica", "ambos"):
+    if modelo in ("logistic", "logistica", "ambos"):
         logger.info("--- Entrenando Modelo Candidato: RiesgoLogisticoP2 ---")
         cw = None if class_weight == "None" else class_weight
         modelo_p2 = RiesgoLogisticoP2(
@@ -200,7 +228,7 @@ def main(
         estimador_log = getattr(modelo_p2, "estimator_", modelo_p2)
 
         tracker.registrar_run(
-            run_name="p2-baseline-logistic-regression",
+            run_name="p2-logistic-regression",
             params={
                 **params_base,
                 "modelo": "LogisticRegression",
@@ -236,7 +264,144 @@ def main(
         })
 
     # -------------------------------------------------------------
-    # 3. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
+    # 3. CANDIDATOS: GRADIENT BOOSTING (gbm, gbm_search -> gbm_tuned)
+    # -------------------------------------------------------------
+    if modelo in ("gbm", "gbm_search"):
+        # Matrices de variables, una sola vez, para no copiar la tabla en cada modelo
+        X_train = df_train[P2_VARIABLES]
+        X_val = df_val[P2_VARIABLES]
+        X_test = df_test[P2_VARIABLES]
+
+    def entrenar_gbm_candidato(hp: dict, nombre: str, extra_tags: dict = None):
+        """Entrena un HistGradientBoostingClassifier, lo evalúa en los 3 conjuntos y lo registra.
+
+        El modelo se registra tal cual; su predict decide con 0.5, igual que P2_UMBRAL_DECISION.
+        """
+        logger.info(f"--- Entrenando Candidato: Gradient Boosting ({nombre}) {hp} ---")
+        t0 = time.time()
+        modelo_gbm = HistGradientBoostingClassifier(random_state=RANDOM_SEED, **hp)
+        modelo_gbm.fit(X_train, y_train)
+        segundos = time.time() - t0
+
+        prob_train = modelo_gbm.predict_proba(X_train)[:, 1]
+        prob_val = modelo_gbm.predict_proba(X_val)[:, 1]
+        prob_test = modelo_gbm.predict_proba(X_test)[:, 1]
+        pred_train = prob_train >= umbral
+        pred_val = prob_val >= umbral
+        pred_test = prob_test >= umbral
+
+        m_train = extraer_metricas_clasificacion(y_train, pred_train, prob_train, "Train")
+        m_val = extraer_metricas_clasificacion(y_val, pred_val, prob_val, "Validación")
+        m_test = extraer_metricas_clasificacion(y_test, pred_test, prob_test, "Test")
+
+        df_predicciones[f"prob_{nombre}"] = np.round(prob_test, 4)
+        df_predicciones[f"pred_{nombre}"] = pred_test.astype(int)
+
+        imprimir_metricas_modelo(nombre, m_train, m_val, m_test)
+        logger.info(f"[{nombre}] Iteraciones usadas: {modelo_gbm.n_iter_} | Entrenamiento: {segundos:.1f} s")
+
+        run_id = tracker.registrar_run(
+            run_name=f"p2-{nombre}",
+            params={
+                **params_base,
+                "modelo": "HistGradientBoostingClassifier",
+                "variables_predictoras": ", ".join(P2_VARIABLES),
+                "umbral": umbral,
+                "n_iter_real": modelo_gbm.n_iter_,
+                **hp,
+            },
+            tags={
+                **tags_base,
+                "version": nombre,
+                "question": "P2",
+                "model_family": "hist_gradient_boosting",
+                "stage_of_work": "candidate",
+                **(extra_tags or {}),
+            },
+            tabla=pd.DataFrame([m_train, m_val, m_test]),
+            tabla_est=pd.DataFrame(),
+            modelo=modelo_gbm,
+            X_ejemplo=X_train.head(5),
+            figuras=figuras_p2(y_test, pred_test, prob_test, nombre),
+            df_train=X_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
+            serialization_format="cloudpickle",
+        )
+        # Costo de entrenamiento, para comparar candidatos
+        mlflow.MlflowClient().log_metric(run_id, "train_seconds", segundos)
+
+        filas_comparacion.append({
+            "modelo": nombre,
+            "train_f1": m_train["f1_score"],
+            "val_f1": m_val["f1_score"],
+            "test_precision": m_test["precision"],
+            "test_recall": m_test["recall"],
+            "test_f1": m_test["f1_score"],
+            "test_pr_auc": m_test["pr_auc"],
+        })
+
+    if modelo == "gbm":
+        entrenar_gbm_candidato(P2_GBM_PARAMS, nombre="gbm")
+
+    if modelo == "gbm_search":
+        combinaciones = [
+            dict(zip(P2_GBM_GRID, valores)) for valores in itertools.product(*P2_GBM_GRID.values())
+        ]
+        tags_busqueda = {
+            **tags_base,
+            "question": "P2",
+            "model_family": "hist_gradient_boosting",
+            "stage_of_work": "search",
+        }
+        mejor_hp, mejor_pr_auc = None, -1.0
+
+        with mlflow.start_run(run_name="P2_gbm_search") as padre:
+            mlflow.set_tags(tags_busqueda)
+            mlflow.log_params({
+                "n_combinaciones": len(combinaciones),
+                "criterio": "validation_pr_auc",
+                "umbral_decision": umbral,
+            })
+
+            for i, hp in enumerate(combinaciones):
+                with mlflow.start_run(run_name=f"search_{i:02d}", nested=True):
+                    mlflow.set_tags(tags_busqueda)
+                    mlflow.log_params(hp)
+                    logger.info(f"search_{i:02d}: {hp}")
+                    try:
+                        t0 = time.time()
+                        m = HistGradientBoostingClassifier(random_state=RANDOM_SEED, **hp)
+                        m.fit(X_train, y_train)
+                        segundos = time.time() - t0
+
+                        prob_val = m.predict_proba(X_val)[:, 1]
+                        m_val = extraer_metricas_clasificacion(y_val, prob_val >= umbral, prob_val, "Validación")
+                        mlflow.log_metrics({
+                            **tracker.metricas_a_dict(pd.DataFrame([m_val])),
+                            "train_seconds": segundos,
+                            "n_iter_real": m.n_iter_,
+                        })
+                        logger.info(
+                            f"search_{i:02d}: Val PR-AUC {m_val['pr_auc']:.4f} | "
+                            f"Val F1 {m_val['f1_score']:.4f} | {segundos:.1f} s"
+                        )
+                        if m_val["pr_auc"] > mejor_pr_auc:
+                            mejor_pr_auc, mejor_hp = m_val["pr_auc"], hp
+                    except Exception as e:
+                        mlflow.set_tag("fallo", "true")
+                        mlflow.set_tag("error", str(e)[:250])
+                        logger.warning(f"search_{i:02d} falló y se omite: {e}")
+
+            if mejor_hp is None:
+                raise RuntimeError("Ninguna combinación de la búsqueda terminó correctamente.")
+            mlflow.log_metric("best_validation_pr_auc", mejor_pr_auc)
+            mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
+            id_padre = padre.info.run_id
+
+        entrenar_gbm_candidato(mejor_hp, nombre="gbm_tuned", extra_tags={"search_run_id": id_padre})
+
+    # -------------------------------------------------------------
+    # 4. GUARDAR COMPARATIVA Y PREDICCIONES (SOLO PARQUET)
     # -------------------------------------------------------------
     df_p2_comp = pd.DataFrame(filas_comparacion).set_index("modelo")
     p2_comp_path = REPORTS_DIR / "p2_comparacion.parquet"
