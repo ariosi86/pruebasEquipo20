@@ -29,6 +29,7 @@ from proyecto_mibici.config import (
     P1_TEST_INICIO,
     P1_VAL_INICIO,
     REPORTS_DIR,
+    TRIPS_TRAIN_PATH,
     URI_MLFLOW_TRACKING,
     RANDOM_SEED,
     P1_LGBM_GRID_POISSON,
@@ -248,6 +249,8 @@ def main(
             X_ejemplo=df_train[P1_FEATURES_V2].head(5),
             figuras=figuras_p1(df_test, pred_test, target_col, nombre),
             serialization_format="cloudpickle",
+            df_train=df_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
         )
         registrar_fila_comparacion(filas_comparacion, nombre, m_train, m_val, m_test)
 
