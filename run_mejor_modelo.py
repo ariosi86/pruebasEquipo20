@@ -39,15 +39,18 @@ MODELOS_A_REGISTRAR = [
             "LightGBM Regresión Tweedie (objective=tweedie, varianza=1.5, lr=0.1, "
             "num_leaves=127, n_estimators=600) sobre features V2 (lags 1/24/168h, "
             "medias moviles 3h/168h, codificacion ciclica del hora, fin de semana). "
-            "Seleccionado por mejor Test MAE (0.790) y WAPE (0.631) frente al baseline "
+            "Seleccionado por mejor Test MAE (0.789) y WAPE (0.630) frente al baseline "
             "lineal con rolling (MAE 0.853, WAPE 0.681), con sesgo casi nulo y "
             "comportamiento estable entre Train y Test."
         ),
         "metrica_test": "test_mae",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P1"
-            and (tags.get("version") == "lgbm_tweedie"
-                 or "tweedie" in str(params.get("modelo", "")).lower())
+            and (
+                tags.get("version") == "lgbm_tweedie_tuned"
+                or tags.get("version") == "lgbm_tweedie"
+                or "tweedie" in str(params.get("modelo", "")).lower()
+            )
         ),
     },
     {
@@ -55,17 +58,16 @@ MODELOS_A_REGISTRAR = [
         "pregunta": "P2",
         "descripcion": (
             "Modelo de produccion para P2 (riesgo de desbalance de estacion). "
-            "Regresion Logistica sin peso de clases (class_weight=None) con umbral "
-            "de decision 0.5 sobre las variables de riesgo P2. Seleccionado por mejor "
-            "equilibrio precision/recall en Test (F1 0.832, PR-AUC 0.806, precision "
-            "0.831, recall 0.832) frente al logistico balanceado (F1 0.794) y al "
-            "umbral sensible 0.3 (F1 0.706)."
+            "Regresion Logistica con class_weight=balanced y umbral de decision 0.5 "
+            "sobre las variables de riesgo P2. Seleccionado por mejor Test F1 "
+            "(0.833) y PR-AUC (0.842) frente a Regresion Logistica sin peso "
+            "(class_weight=None) y al umbral sensible (0.3)."
         ),
         "metrica_test": "test_f1_score",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P2"
-            and str(params.get("modelo", "")).lower() == "logisticregression"
-            and str(params.get("class_weight", "")) in ("None", "None")
+            and "logisticregression" in str(params.get("modelo", "")).lower()
+            and str(params.get("class_weight", "")) in ("balanced", "None")
             and str(params.get("umbral", "")) == "0.5"
         ),
     },
@@ -82,7 +84,7 @@ MODELOS_A_REGISTRAR = [
         "metrica_test": "test_silhouette",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P3"
-            and str(params.get("modelo", "")).lower() == "kmeans"
+            and "kmeans" in str(params.get("modelo", "")).lower()
             and str(params.get("n_clusters", "")) == "4"
         ),
     },

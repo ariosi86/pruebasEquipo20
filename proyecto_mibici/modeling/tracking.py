@@ -5,6 +5,7 @@ Módulo de integración defensiva con MLflow Tracking convertido en clase orient
 """
 
 import hashlib
+import os
 import subprocess
 from pathlib import Path
 
@@ -19,9 +20,21 @@ try:
 except ImportError:  # mlflow >= 3
     from mlflow.data.pandas_dataset import from_pandas as from_df
 
+try:
+    import lightgbm as lgb
+except ImportError:
+    lgb = None
+try:
+    import mlflow.lightgbm
+except ImportError:
+    mlflow_lightgbm = None
+else:
+    mlflow_lightgbm = mlflow.lightgbm
+
 from proyecto_mibici.config import (
     FIGURES_DIR,
     MANIFEST_PATH,
+    MLFLOW_EXPERIMENT_NAME,
     PROJ_ROOT,
     TRIPS_PROCESSED_PATH
 )
@@ -141,8 +154,28 @@ class MLFlowTracker:
         if "question" not in tags and "pregunta" in params:
             tags = {**tags, "question": params["pregunta"]}
 
+        # Params que MLflow Projects ya registró vía -P; no se pueden volver a setear
+        MLFLOW_PROJECT_PARAMS = {
+            "modelo", "lr", "alpha", "umbral",
+            "class_weight", "max_iter", "n_clusters", "n_init",
+        }
+
+        # Params filtrados (sin los que MLflow Projects ya registró)
+        params_filtered = {
+            k: v for k, v in params.items() if k not in MLFLOW_PROJECT_PARAMS
+        }
+
+        # Asegurar que usamos el experimento correcto
+        mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+
+        # Terminar cualquier run activo previo para evitar conflictos
+        try:
+            mlflow.end_run()
+        except Exception:
+            pass
+
         with mlflow.start_run(run_name=run_name) as run:
-            mlflow.log_params({k: str(v) for k, v in params.items()})
+            mlflow.log_params({k: str(v) for k, v in params_filtered.items()})
             mlflow.log_metrics(self.metricas_a_dict(tabla))
             mlflow.set_tags(tags)
 
@@ -165,17 +198,42 @@ class MLFlowTracker:
                         signature = infer_signature(X_ejemplo, modelo.predict(X_ejemplo))
                     except Exception:
                         signature = None
-                kwargs_modelo = {}                                   # NUEVO
-                if serialization_format is not None:                 # NUEVO
-                    kwargs_modelo["serialization_format"] = serialization_format
 
-                mlflow.sklearn.log_model(
-                    sk_model=modelo,
-                    name="model",
-                    signature=signature,
-                    input_example=X_ejemplo,
-                    **kwargs_modelo,                                 # NUEVO
-                )
+                try:
+                    # Usar el sabor nativo de MLflow para LightGBM si corresponde
+                    if lgb is not None and isinstance(modelo, lgb.LGBMRegressor):
+                        if mlflow_lightgbm is not None:
+                            mlflow_lightgbm.log_model(
+                                lgb_model=modelo,
+                                artifact_path="model",
+                                signature=signature,
+                                input_example=X_ejemplo,
+                            )
+                        else:
+                            logger.warning("mlflow.lightgbm no disponible; usando mlflow.sklearn.log_model")
+                            kwargs_modelo = {}
+                            if serialization_format is not None:
+                                kwargs_modelo["serialization_format"] = serialization_format
+                            mlflow.sklearn.log_model(
+                                sk_model=modelo,
+                                artifact_path="model",
+                                signature=signature,
+                                input_example=X_ejemplo,
+                                **kwargs_modelo,
+                            )
+                    else:
+                        kwargs_modelo = {}
+                        if serialization_format is not None:
+                            kwargs_modelo["serialization_format"] = serialization_format
+                        mlflow.sklearn.log_model(
+                            sk_model=modelo,
+                            artifact_path="model",
+                            signature=signature,
+                            input_example=X_ejemplo,
+                            **kwargs_modelo,
+                        )
+                except Exception as e:
+                    logger.warning(f"No se pudo loggear el modelo en MLflow: {e}")
 
             if figuras:
                 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
