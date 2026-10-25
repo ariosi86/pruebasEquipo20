@@ -10,7 +10,7 @@ commit de Git y versión de datos. Cada modelo registrado recibe una descripció
 
 Nombres de modelo en el Registry:
   - mibici-equipo20-p1-demanda    (P1: LightGBM Regresión Tweedie)
-  - mibici-equipo20-p2-riesgo     (P2: Regresión Logística sin peso, umbral 0.5)
+  - mibici-equipo20-p2-riesgo     (P2: Gradient boosting HistGradientBoostingClassifier, umbral 0.5)
   - mibici-equipo20-p3-grupos     (P3: KMeans funcional K=4)
 
 Uso:
@@ -57,18 +57,23 @@ MODELOS_A_REGISTRAR = [
         "name": "mibici-equipo20-p2-riesgo",
         "pregunta": "P2",
         "descripcion": (
-            "Modelo de produccion para P2 (riesgo de desbalance de estacion). "
-            "Regresion Logistica con class_weight=balanced y umbral de decision 0.5 "
-            "sobre las variables de riesgo P2. Seleccionado por mejor Test F1 "
-            "(0.833) y PR-AUC (0.842) frente a Regresion Logistica sin peso "
-            "(class_weight=None) y al umbral sensible (0.3)."
+            "Modelo de produccion para P2 (riesgo de que una estacion quede vacia o llena "
+            "en la hora siguiente). Gradient boosting (HistGradientBoostingClassifier) con "
+            "los valores por defecto de scikit-learn (learning_rate=0.1, max_iter=100, "
+            "max_leaf_nodes=31, min_samples_leaf=20) y umbral de decision 0.5, sobre las "
+            "12 variables de P2. Supera al baseline de persistencia en prueba: F1 0.865 vs "
+            "0.833, PR-AUC (average precision) 0.942 vs 0.712 y precision 0.896 vs 0.833, "
+            "con recall similar (0.837 vs 0.833). Se prefirio sobre la version afinada por "
+            "busqueda anidada (gbm_tuned: F1 0.865, PR-AUC 0.943) porque rinde igual con "
+            "menos de la mitad del tiempo de entrenamiento (27 s vs 64 s) y un modelo mucho "
+            "mas ligero (100 arboles de 31 hojas vs 373 de 63)."
         ),
         "metrica_test": "test_f1_score",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P2"
-            and "logisticregression" in str(params.get("modelo", "")).lower()
-            and str(params.get("class_weight", "")) in ("balanced", "None")
-            and str(params.get("umbral", "")) == "0.5"
+            and tags.get("version") == "gbm"
+            and tags.get("model_family") == "hist_gradient_boosting"
+            and "gbm_n_iter_real" in params
         ),
     },
     {
