@@ -379,7 +379,7 @@ def main(
                         mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
                                         "train_seconds": segundos})
                         if m_val["WAPE"] < mejor_wape:
-                            mejor_wape, mejor_hp = m_val["MAE"], hp
+                            mejor_mae, mejor_hp = m_val["MAE"], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
                         mlflow.set_tag("error", str(e)[:250])
@@ -387,7 +387,7 @@ def main(
                         continue
 
 
-            mlflow.log_metric("best_validation_wape", mejor_wape)
+            mlflow.log_metric("best_validation_mae", mejor_mae)
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
@@ -428,8 +428,8 @@ def main(
                     
                         mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
                                         "train_seconds": segundos})
-                        if m_val["WAPE"] < mejor_wape:
-                            mejor_wape, mejor_hp = m_val["MAE"], hp
+                        if m_val["WAPE"] < mejor_mae:
+                            mejor_mae, mejor_hp = m_val["MAE"], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
                         mlflow.set_tag("error", str(e)[:250])
@@ -437,7 +437,7 @@ def main(
                         continue
 
 
-            mlflow.log_metric("best_validation_wape", mejor_wape)
+            mlflow.log_metric("best_validation_mae", mejor_mae)
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
@@ -448,7 +448,7 @@ def main(
     # -------------------------------------------------------------
     elif model == "lgbm_tweedie":
             entrenar_lgbm_candidato({"objective": "tweedie",
-                         "tweedie_variance_power": 1.5,
+                         "tweedie_variance_power": 1.8,
                          "learning_rate": 0.1, "num_leaves": 127, "n_estimators": 600},
                         nombre="lgbm_tweedie")
     else:
