@@ -36,7 +36,7 @@ MODELOS_A_REGISTRAR = [
         "pregunta": "P1",
         "descripcion": (
             "Modelo de produccion para P1 (demanda horaria de viajes por estacion). "
-            "LightGBM Regresión Tweedie (objective=tweedie, varianza=1.5, lr=0.1, "
+            "LightGBM Regresión Tweedie (objective=tweedie, varianza=1.8, lr=0.1, "
             "num_leaves=127, n_estimators=600) sobre features V2 (lags 1/24/168h, "
             "medias moviles 3h/168h, codificacion ciclica del hora, fin de semana). "
             "Seleccionado por mejor Test MAE (0.789) y WAPE (0.630) frente al baseline "
