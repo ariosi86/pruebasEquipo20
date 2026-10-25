@@ -75,16 +75,18 @@ MODELOS_A_REGISTRAR = [
         "name": "mibici-equipo20-p3-grupos",
         "pregunta": "P3",
         "descripcion": (
-            "Modelo de produccion para P3 (clusteres funcionales de estaciones). "
-            "KMeans con K=4 y n_init=10 sobre variables perfil P3 escaladas con "
-            "StandardScaler. Seleccionado por mejor Test Silhouette (0.182) y menor "
-            "Davies-Bouldin (1.535) frente al baseline municipal (Silhouette 0.019, "
-            "DB 3.712) y a K=3/5/6."
+            "Modelo de produccion para P3 (grupos funcionales de estaciones). "
+            "KMeans con k=4 y n_init=10 sobre ocho variables de perfil escaladas con "
+            "StandardScaler. k=4 obtuvo el mejor silhouette (0.183) y el menor "
+            "Davies-Bouldin (1.570) en validacion (enero-abril 2026) dentro de la "
+            "busqueda de k=2 a 8. En prueba (mayo-septiembre 2026) confirma la ventaja "
+            "sobre el baseline municipal: silhouette 0.182 contra 0.019 y "
+            "Davies-Bouldin 1.535 contra 3.712."
         ),
         "metrica_test": "test_silhouette",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P3"
-            and "kmeans" in str(params.get("modelo", "")).lower()
+            and tags.get("stage_of_work") == "candidate"
             and str(params.get("n_clusters", "")) == "4"
         ),
     },
