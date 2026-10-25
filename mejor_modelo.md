@@ -14,7 +14,7 @@ Este documento resume la comparación de modelos ejecutada con `run_train.py` (t
 
 | Pregunta | Modelo elegido | Nombre en Model Registry | Métrica de decisión (Test) | Baseline (Test) | Mejora vs. baseline |
 |----------|----------------|--------------------------|----------------------------|-----------------|---------------------|
-| P1 | LightGBM Regresión Tweedie (`lgbm_tweedie`) | `mibici-equipo20-p1-demanda` | Test MAE **0.790** | 0.853 (lineal + rolling) | −7.3 % MAE / −7.4 % WAPE |
+| P1 | LightGBM Tweedie (champion; mejor modelo de la búsqueda anidada). Challenger por comparación: LightGBM Poisson (no registrado) | `mibici-equipo20-p1-demanda` | Val MAE **0.816** (criterio) · Test MAE 0.789 (reportado) | 0.853 (lineal + rolling) | −7.5 % MAE / −8.8 % RMSE |
 | P2 | Gradient boosting `HistGradientBoostingClassifier` con valores por defecto, umbral 0.5 (`gbm`) | `mibici-equipo20-p2-riesgo` | Test F1 **0.865** / PR-AUC **0.942** | F1 0.833 / PR-AUC 0.712 (persistencia) | +3.2 pts F1 / +23.0 pts PR-AUC |
 | P3 | KMeans funcional con K=4 | `mibici-equipo20-p3-grupos` | Test Silhouette **0.182** / DB **1.535** | Silhouette 0.019 / DB 3.71 (municipio) | +0.163 Silhouette / −2.18 DB |
 
@@ -24,15 +24,16 @@ Este documento resume la comparación de modelos ejecutada con `run_train.py` (t
 
 ### 3.1 P1 — Demanda horaria (Regresión)
 
-Métrica de negocio: error absoluto en la estimación de viajes para la hora $t+1$ (el operador planea la flota; subestimar genera falta de bicis, sobreestimar genera ociosidad). Se usa **MAE** y **WAPE** como métricas principales, con **RMSE** y **Sesgo** como secundarias.
+Se selecciona por menor **MAE de validación**; la prueba se reporta una sola vez.
+WAPE, RMSE y sesgo son complementarias. Sesgo = media(pred − real).
+Métrica de negocio: subestimar la demanda deja estaciones sin bicicletas; sobreestimarla genera rebalanceos innecesarios.
 
-| Modelo | Hiperparámetros clave | Validación MAE | Validación WAPE | Test MAE | Test RMSE | Test WAPE | Test Sesgo | Mejora MAE vs baseline |
-|--------|----------------------|----------------|-----------------|----------|-----------|-----------|------------|------------------------|
-| Baseline (lineal + rolling, v2) | `StandardScaler` + `LinearRegression`, features V2 (lags 1/24/168h, rolling 3/168h, ciclor diario, fin de semana) | 0.886 | 0.663 | **0.853** | 1.545 | 0.681 | 0.004 | — (referencia) |
-| v1_lineal (sin rolling) | `StandardScaler` + `LinearRegression`, features V1 (sin rolling) | — | — | 0.865 | 1.558 | 0.691 | 0.009 | −1.4 % |
-| Regresión de Poisson | `PoissonRegressor(alpha=1e-4, max_iter=300)`, lr=0.05 | — | — | 1.181 | 4.341 | 0.943 | 0.137 | −38.4 % (peor) |
-| LightGBM Poisson | `objective=poisson`, lr=0.1, num_leaves=127, n_estimators=600 | 0.820 | 0.614 | **0.792** | 1.422 | 0.632 | −0.018 | +7.3 % |
-| LightGBM Tweedie (ELEGIDO) | `objective=tweedie`, tweedie_variance_power=1.5, lr=0.1, num_leaves=127, n_estimators=600 | 0.818 | 0.612 | **0.790** | 1.410 | 0.631 | −0.023 | **+7.3 %** |
+| Modelo | Hiperparámetros clave | Val MAE | Val WAPE | Test MAE | Test RMSE | Test WAPE | Test sesgo | Mejora MAE test |
+|---|---|---|---|---|---|---|---|---|
+| Baseline (lineal + rolling, v2) | StandardScaler + LinearRegression, features V2 | 0.885 | 0.663 | 0.853 | 1.545 | 0.681 | +0.004 | referencia |
+| Regresión de Poisson | PoissonRegressor(alpha=1e-4, max_iter=300) | 1.165 | 0.872 | 1.181 | 4.341 | 0.943 | +0.137 | −38.5 % |
+| LightGBM Poisson (challenger) | objective=poisson, lr=0.1, num_leaves=127, n_estimators=600 | 0.819 | 0.614 | 0.792 | 1.422 | 0.632 | −0.018 | +7.2 % |
+| LightGBM Tweedie (champion) | objective=tweedie, power=1.8, lr=0.1, num_leaves=127, n_estimators=600 | 0.816 | 0.611 | 0.789 | 1.409 | 0.630 | −0.027 | +7.5 % |
 
 ### 3.2 P2 — Riesgo de desbalance (Clasificación)
 
@@ -68,11 +69,12 @@ Métrica de negocio: identificar grupos funcionales de estaciones para planeaci�
 
 ## 4. Análisis de la comparación y justificación del modelo elegido
 
-### P1 — Demanda horaria → **LightGBM Tweedie**
-- **Desempeño vs. baseline:** LightGBM Tweedie reduce el Test MAE de 0.853 a 0.790 (−7.3 %) y el WAPE de 0.681 a 0.631 (−7.4 %). LightGBM Poisson es casi idéntico (0.792 / 0.632), pero Tweedie es marginalmente mejor y más adecuado para conteos con muchos ceros (horas sin viajes), propia de la demanda horaria por estación.
-- **Métrica ligada a la decisión:** El operador planea la flota; un error sistemático de subestimación deja la flota corta. Tweedie tiene sesgo casi nulo en Test (−0.023), por lo que no sesga ni al alza ni a la baja la planificación.
-- **Estabilidad:** Train y Test son consistentes (Train MAE 0.818 vs Test 0.790; WAPE 0.612 vs 0.631), sin indicios de sobreajuste.
-- **Costo:** LightGBM es rápido de entrenar e inferir sobre la matriz de características horarias (lags + ventanales), mucho más ligero que un búsqueda anidada completa, y la inferencia por estación/hora es trivial en producción.
+### P1 → LightGBM Tweedie (champion)
+- **Regla:** menor MAE de validación (0.816 vs 0.819 de Poisson). Empate práctico; Poisson queda como challenger por menor sesgo (−1.4 % vs −2.1 %) y un hiperparámetro menos.
+- **Desempeño:** MAE de prueba −7.5 % y RMSE −8.8 % frente al baseline.
+- **Sesgo:** ambos subestiman levemente y de forma estable entre validación y prueba; Tweedie subestima más que Poisson (≈300 vs ≈200 viajes diarios en la red). El Poisson lineal sobreestima +11 %.
+- **Estabilidad:** mejora en validación (7.7 %) y prueba (7.5 %) casi idéntica; el MAE es estable entre entrenamiento, validación y prueba (0.820, 0.816, 0.789).
+- **Costo:** 17.7s por corrida completa, comparable al baseline (14.3s).
 
 ### P2 — Riesgo de desbalance → **Gradient boosting (`gbm`)**
 - **Desempeño vs. baseline:** La persistencia es un baseline exigente (F1 0.833 en prueba), porque el estado de riesgo cambia poco de una hora a la siguiente. Ninguna de las cuatro versiones logísticas lo supera en F1 (la mejor llega a 0.832), aunque sí ordenan mejor los casos de riesgo (PR-AUC 0.806 contra 0.712). La búsqueda anidada sobre la logística (16 combinaciones) no cambia el resultado: su límite está en ser un modelo lineal, no en sus hiperparámetros. El gradient boosting sí supera al baseline: F1 0.865, PR-AUC 0.942 y precisión 0.896, con un recall similar (0.837 contra 0.833).

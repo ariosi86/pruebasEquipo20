@@ -29,6 +29,7 @@ from proyecto_mibici.config import (
     P1_TEST_INICIO,
     P1_VAL_INICIO,
     REPORTS_DIR,
+    TRIPS_TRAIN_PATH,
     URI_MLFLOW_TRACKING,
     RANDOM_SEED,
     P1_LGBM_GRID_POISSON,
@@ -248,6 +249,8 @@ def main(
             X_ejemplo=df_train[P1_FEATURES_V2].head(5),
             figuras=figuras_p1(df_test, pred_test, target_col, nombre),
             serialization_format="cloudpickle",
+            df_train=df_train,
+            ruta_entrenamiento=str(TRIPS_TRAIN_PATH),
         )
         registrar_fila_comparacion(filas_comparacion, nombre, m_train, m_val, m_test)
 
@@ -376,7 +379,7 @@ def main(
                         mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
                                         "train_seconds": segundos})
                         if m_val["WAPE"] < mejor_wape:
-                            mejor_wape, mejor_hp = m_val["MAE"], hp
+                            mejor_mae, mejor_hp = m_val["MAE"], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
                         mlflow.set_tag("error", str(e)[:250])
@@ -384,7 +387,7 @@ def main(
                         continue
 
 
-            mlflow.log_metric("best_validation_wape", mejor_wape)
+            mlflow.log_metric("best_validation_mae", mejor_mae)
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
@@ -425,8 +428,8 @@ def main(
                     
                         mlflow.log_metrics({**tracker.metricas_a_dict(pd.DataFrame([m_val])),
                                         "train_seconds": segundos})
-                        if m_val["WAPE"] < mejor_wape:
-                            mejor_wape, mejor_hp = m_val["MAE"], hp
+                        if m_val["WAPE"] < mejor_mae:
+                            mejor_mae, mejor_hp = m_val["MAE"], hp
                     except Exception as e:
                         mlflow.set_tag("fallo", "true")
                         mlflow.set_tag("error", str(e)[:250])
@@ -434,7 +437,7 @@ def main(
                         continue
 
 
-            mlflow.log_metric("best_validation_wape", mejor_wape)
+            mlflow.log_metric("best_validation_mae", mejor_mae)
             mlflow.log_params({f"best_{k}": v for k, v in mejor_hp.items()})
             id_padre = padre.info.run_id
 
@@ -445,7 +448,7 @@ def main(
     # -------------------------------------------------------------
     elif model == "lgbm_tweedie":
             entrenar_lgbm_candidato({"objective": "tweedie",
-                         "tweedie_variance_power": 1.5,
+                         "tweedie_variance_power": 1.8,
                          "learning_rate": 0.1, "num_leaves": 127, "n_estimators": 600},
                         nombre="lgbm_tweedie")
     else:

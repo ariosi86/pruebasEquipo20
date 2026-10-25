@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Orquestador de entrenamientos para MiBici (P1/P2/P3).
+Orquestador de entrenamientos MLflow Projects para MiBici (P1/P2/P3).
 
-Atajo para ejecutar todas las versiones candidatas de una pregunta en un solo
-comando, en lugar de lanzarlas una a una. Cada versión tiene sus
+Atajo para lanzar con ``mlflow run`` todas las versiones candidatas de una
+pregunta en un solo comando, en lugar de lanzarlas una a una. Cada versión tiene sus
 hiperparámetros hardcodeados.
 
 No recibe parámetros de ejecución sueltos: solo elige la pregunta y, opcional,
@@ -17,32 +17,30 @@ import sys
 
 import typer
 
-from proyecto_mibici.config import P2_UMBRAL_DECISION, P3_K_ELEGIDO
+from proyecto_mibici.config import MLFLOW_EXPERIMENT_NAME, P2_UMBRAL_DECISION, URI_MLFLOW_TRACKING
 
-app = typer.Typer(help="Orquestador de entrenamientos (P1/P2/P3).")
+app = typer.Typer(help="Orquestador de entrenamientos MLflow Projects (P1/P2/P3).")
 
 
 def _ejecutar(cmd: list[str], etiqueta: str) -> None:
     typer.secho(f"[Entrenamiento] {etiqueta}", fg=typer.colors.CYAN, bold=True)
     typer.echo(f"  $ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, env=os.environ.copy())
+    env = os.environ.copy()
+    # mlflow run crea la corrida antes de lanzar el script; ambos deben usar el mismo servidor
+    env.setdefault("MLFLOW_TRACKING_URI", URI_MLFLOW_TRACKING)
+    subprocess.run(cmd, check=True, env=env)
 
 
-# Mapeo de entry_point de MLproject a (modulo, argumento_cli) para ejecución directa
-ENTRY_POINT_MAP = {
-    "train_p1": ("proyecto_mibici.modeling.train_p1", "--model"),
-    "train_p2": ("proyecto_mibici.modeling.train_p2", "--modelo"),
-    "train_p3": ("proyecto_mibici.modeling.train_p3", "--modelo"),
-}
-
-
-def _direct_run_cmd(entry_point: str, modelo: str, extra_params: list[str]) -> list[str]:
-    """Construye el comando python -m para una versión dada, sin depender de mlflow run."""
-    modulo, modelo_cli = ENTRY_POINT_MAP[entry_point]
-    cmd = [sys.executable, "-m", modulo, modelo_cli, modelo]
+def _mlflow_run_cmd(entry_point: str, extra_params: list[str]) -> list[str]:
+    """Construye el comando mlflow run para una versión dada."""
+    cmd = [
+        "mlflow", "run", ".", "-e", entry_point,
+        "--env-manager", "local",
+        "--experiment-name", MLFLOW_EXPERIMENT_NAME,
+    ]
     for param in extra_params:
         clave, valor = param.split("=", 1)
-        cmd += [f"--{clave}", valor]
+        cmd += ["-P", f"{clave}={valor}"]
     return cmd
 
 
@@ -56,14 +54,15 @@ VERSIONES_P1 = [
     ("lgbm_poisson", "lgbm_poisson", [], "train_p1"),
     ("lgbm_poisson_search", "lgbm_p_search", [], "train_p1"),
     ("lgbm_tweedie", "lgbm_tweedie", [], "train_p1"),
+    ("lgbm_tweedie_search", "lgbm_t_search", [], "train_p1"),
 ]
 
-# En P2 las opciones del script llevan guion medio (--class-weight, --max-iter).
+# Los parámetros van con -P y usan los nombres del MLproject (class_weight, max_iter).
 VERSIONES_P2 = [
     ("baseline", "baseline", [], "train_p2"),
-    ("logistic_balanced", "logistic", [f"umbral={P2_UMBRAL_DECISION}", "class-weight=balanced", "max-iter=1000"], "train_p2"),
-    ("logistic_sin_peso", "logistic", [f"umbral={P2_UMBRAL_DECISION}", "class-weight=None", "max-iter=1000"], "train_p2"),
-    ("logistic_umbral_sensible", "logistic", ["umbral=0.3", "class-weight=balanced", "max-iter=1000"], "train_p2"),
+    ("logistic_balanced", "logistic", [f"umbral={P2_UMBRAL_DECISION}", "class_weight=balanced", "max_iter=1000"], "train_p2"),
+    ("logistic_sin_peso", "logistic", [f"umbral={P2_UMBRAL_DECISION}", "class_weight=None", "max_iter=1000"], "train_p2"),
+    ("logistic_umbral_sensible", "logistic", ["umbral=0.3", "class_weight=balanced", "max_iter=1000"], "train_p2"),
     ("logistic_search", "logistic_search", [], "train_p2"),
     ("gbm", "gbm", [], "train_p2"),
     ("gbm_search", "gbm_search", [], "train_p2"),
@@ -71,11 +70,11 @@ VERSIONES_P2 = [
 
 VERSIONES_P3 = [
     ("baseline", "baseline", [], "train_p3"),
+    ("kmeans_search", "kmeans_search", ["n_init=10"], "train_p3"),
     ("kmeans_k3", "kmeans", ["n_clusters=3", "n_init=10"], "train_p3"),
     ("kmeans_k4", "kmeans", ["n_clusters=4", "n_init=10"], "train_p3"),
     ("kmeans_k5", "kmeans", ["n_clusters=5", "n_init=10"], "train_p3"),
     ("kmeans_k6", "kmeans", ["n_clusters=6", "n_init=10"], "train_p3"),
-    ("kmeans_search", "kmeans_search", [], "train_p3"),
 ]
 
 
@@ -118,13 +117,13 @@ def train(
         entry_point = "train_p3"
 
     for nombre, modelo, extra, _ep in versiones_list:
-        cmd = _direct_run_cmd(entry_point, modelo, extra)
+        cmd = _mlflow_run_cmd(entry_point, ["modelo=" + modelo] + extra)
         _ejecutar(cmd, f"{p.upper()} - {nombre} ({modelo})")
 
 
 @app.command(name="exec-single", help="Ejecuta una sola versión (usado por MLproject train).")
 def exec_single(
-    pregunta: str = typer.Argument(..., help="p1, p2 o p3"),
+    pregunta: str = typer.Option(..., "--pregunta", help="p1, p2 o p3"),
     modelo: str = typer.Option("baseline", help="Nombre del modelo a entrenar."),
     lr: float = typer.Option(0.05, help="Tasa de aprendizaje (P1)."),
     alpha: float = typer.Option(0.0001, help="Regularización (P1 Poisson)."),

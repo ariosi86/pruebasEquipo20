@@ -115,6 +115,13 @@ P1_FEATURES_V1 = [
 ]
 P1_FEATURES_V2 = P1_FEATURES_V1 + ["rolling_3h", "rolling_168h"]
 
+ESTRATEGIAS_BASELINE_P1 = [
+    "persistencia",
+    "lag_24h",
+    "lag_168h",
+    "promedio_24h_168h",
+]
+
 P1_LGBM_GRID_POISSON = {
     "objective": ["poisson"],
     "learning_rate": [0.05, 0.1],
@@ -125,9 +132,9 @@ P1_LGBM_GRID_POISSON = {
 P1_LGBM_GRID_TWEEDIE = {
     "objective": ["tweedie"],
     "learning_rate": [0.1],
-    "num_leaves": [127],
-    "n_estimators": [600],
-    "tweedie_variance_power":[1.2,1.5,1.8]
+    "num_leaves": [63, 127],
+    "n_estimators": [300, 600],
+    "tweedie_variance_power": [1.2, 1.5, 1.8],
 }
 
 
@@ -186,6 +193,8 @@ P2_GBM_GRID = {
 # ==========================================
 P3_TRAIN_INICIO = "2025-01-01"
 P3_TRAIN_FIN = "2026-01-01"
+P3_VAL_INICIO = "2026-01-01"
+P3_VAL_FIN = "2026-05-01"
 P3_TEST_INICIO = "2026-05-01"
 P3_TEST_FIN = "2026-10-01"
 
@@ -212,7 +221,8 @@ P2_GRID_LOGISTIC = {
     "class_weight": [None, "balanced"],
 }
 
+# Búsqueda de k en P3: se elige con el silhouette de validación (train_p3 --modelo kmeans_search)
 P3_GRID_KMEANS = {
-    "n_clusters": [3, 4, 5, 6],
+    "n_clusters": [2, 3, 4, 5, 6, 7, 8],
     "n_init": [10],
 }
