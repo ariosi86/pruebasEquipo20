@@ -65,8 +65,11 @@ MODELOS_A_REGISTRAR = [
         "metrica_test": "test_f1_score",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P2"
-            and "histgradientboosting" in str(params.get("modelo", "")).lower()
-            and tags.get("version") == "v1_gbm"
+            and (
+                "histgradientboosting" in str(params.get("modelo", "")).lower()
+                or "gbm" in str(params.get("modelo", "")).lower()
+            )
+            and "gbm" in str(tags.get("version", "")).lower()
         ),
     },
     {

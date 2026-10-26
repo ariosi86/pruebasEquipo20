@@ -423,7 +423,16 @@ Accede a la interfaz en `http://localhost:5000`. En la terminal de trabajo defin
 export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 ```
 
-> Los hiperparámetros siempre se pasan como `-P clave=valor`. MLflow no lee la sección `variables` del `MLproject` para la URI de tracking; los scripts usan `URI_MLFLOW_TRACKING` desde `config.py`.
+> **Importante:** antes de ejecutar cualquier comando `mlflow run`, exporta la URI de tracking en tu shell:
+> ```bash
+> export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+> ```
+> O, si creaste el archivo `.env`, cárgalo antes:
+> ```bash
+> set -a && source .env && set +a
+> ```
+> Sin esta variable, `mlflow run` usa el file store local por defecto y los runs no quedan registrados en el servidor `http://127.0.0.1:5000`.
+> Los hiperparámetros siempre se pasan como `-P clave=valor`. Los scripts usan `URI_MLFLOW_TRACKING` desde `config.py` para registrar parámetros, métricas y artefactos en MLflow.
 
 #### 9.2.2 Reproducir la ingesta de datos
 
@@ -481,7 +490,7 @@ export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
 # 3. Ingesta de datos
 mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
 
-# 4. Entrenar modelos para producción
+# 4. Entrenar modelos para producción (campeones)
 python run_train.py train --pregunta p1 --versiones baseline,lgbm_tweedie
 python run_train.py train --pregunta p2 --versiones baseline,gbm
 python run_train.py train --pregunta p3 --versiones baseline,kmeans_k4
