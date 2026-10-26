@@ -268,7 +268,7 @@ def main(
     # -------------------------------------------------------------
     # 3. MODELO CANDIDATO: GRADIENT BOOSTING (HistGradientBoostingClassifier)
     # -------------------------------------------------------------
-    if modelo.lower() == "gbm":
+    if modelo.lower() in ("gbm", "ambos"):
         logger.info("--- Entrenando Modelo Candidato: HistGradientBoostingClassifier (GBM) ---")
         modelo_gbm = RiesgoGBMP2(
             features=P2_VARIABLES,
@@ -337,7 +337,7 @@ def main(
     # -------------------------------------------------------------
     # 3.5. BÚSQUEDA ANIDADA DE HIPERPARÁMETROS (GRADIENT BOOSTING)
     # -------------------------------------------------------------
-    elif modelo.lower() == "gbm_search":
+    if modelo.lower() == "gbm_search":
         combinaciones = [dict(zip(P2_GBM_GRID, v)) for v in itertools.product(*P2_GBM_GRID.values())]
         mejor_hp, mejor_pr_auc = None, float("-inf")
 
@@ -447,7 +447,7 @@ def main(
     # -------------------------------------------------------------
     # 4. BÚSQUEDA ANIDADA DE HIPERPARÁMETROS (REGRESIÓN LOGÍSTICA)
     # -------------------------------------------------------------
-    elif modelo.lower() == "logistic_search":
+    if modelo.lower() == "logistic_search":
         combinaciones = [dict(zip(P2_GRID_LOGISTIC, v)) for v in itertools.product(*P2_GRID_LOGISTIC.values())]
         mejor_hp, mejor_f1 = None, float("-inf")
 
