@@ -10,7 +10,7 @@ commit de Git y versión de datos. Cada modelo registrado recibe una descripció
 
 Nombres de modelo en el Registry:
   - mibici-equipo20-p1-demanda    (P1: LightGBM Regresión Tweedie)
-  - mibici-equipo20-p2-riesgo     (P2: Regresión Logística sin peso, umbral 0.5)
+  - mibici-equipo20-p2-riesgo     (P2: HistGradientBoostingClassifier GBM, umbral 0.5)
   - mibici-equipo20-p3-grupos     (P3: KMeans funcional K=4)
 
 Uso:

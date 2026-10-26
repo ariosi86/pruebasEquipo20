@@ -509,13 +509,26 @@ python run_train.py train --pregunta p2 --versiones logistic_search
 
 `run_mejor_modelo.py` registra en el MLflow Model Registry el modelo elegido de cada pregunta, conservando su linaje (experimento, corrida de origen, commit y versión de datos) y agregando una descripción a cada modelo.
 
-**Modelos registrados:**
+**Esquema de ciclo de vida:** cada versión registrada se promueve al stage `Production` y se le asigna el alias `champion`, lo que permite cargar el modelo en producción por nombre y alias:
 
-| Pregunta | Nombre en el Registry | Modelo elegido |
-|---|---|---|
-| P1 | `mibici-equipo20-p1-demanda` | LightGBM Regresión Tweedie |
-| P2 | `mibici-equipo20-p2-riesgo` | Regresión Logística sin peso, umbral 0.5 |
-| P3 | `mibici-equipo20-p3-grupos` | KMeans funcional K=4 |
+```python
+import mlflow
+
+# P1
+modelo_p1 = mlflow.pyfunc.load_model("models:/mibici-equipo20-p1-demanda@champion")
+# P2
+modelo_p2 = mlflow.pyfunc.load_model("models:/mibici-equipo20-p2-riesgo@champion")
+# P3
+modelo_p3 = mlflow.pyfunc.load_model("models:/mibici-equipo20-p3-grupos@champion")
+```
+
+**Modelos registrados (1 campeón por pregunta):**
+
+| Pregunta | Nombre en el Registry | Modelo elegido | Métrica de decisión (Test) | Justificación |
+|---|---|---|---|---|
+| P1 | `mibici-equipo20-p1-demanda` | LightGBM Regresión Tweedie | MAE 0.789 | Mejor MAE de validación (0.816) y prueba (0.789); −7.5 % vs baseline lineal (0.853). |
+| P2 | `mibici-equipo20-p2-riesgo` | HistGradientBoostingClassifier (GBM), umbral 0.5 | F1 0.865 / PR-AUC 0.942 | Único candidato que supera al baseline de persistencia (F1 0.833); Regresión Logística se queda en F1 0.832 (no supera al baseline). |
+| P3 | `mibici-equipo20-p3-grupos` | KMeans funcional K=4 | Silhouette 0.182 | Mejor Silhouette de prueba (0.182) y menor Davies-Bouldin (1.535) entre k=3..6; supera al baseline municipal (0.019 / 3.712). |
 
 **Ejecución:**
 
@@ -525,11 +538,30 @@ python run_mejor_modelo.py
 
 El script es idempotente: si ya existe una versión para la misma corrida de origen, la reusa y actualiza su descripción y tags en lugar de duplicarla.
 
-Todos los modelos se promueven al stage `Production`. Quedan accesibles en MLflow (sección Models) y pueden cargarse para inferencia con:
+**Comandos `mlflow run` para reproducir cada campeón desde un clon limpio:**
 
-```python
-import mlflow
-modelo = mlflow.pyfunc.load_model("models:/mibici-equipo20-p1-demanda@champion")
+```bash
+# 1. Levantar MLflow (terminal aparte)
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --port 5000
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+
+# 2. Ingesta de datos
+mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
+
+# 3. Entrenar campeones
+mlflow run . -e train_p1 --env-manager local --experiment-name mibici-equipo20 -P modelo=lgbm_tweedie
+mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -P modelo=gbm
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=4 -P n_init=10
+
+# 4. Registrar campeones en el Model Registry
+python run_mejor_modelo.py
 ```
+
+**Verificación del alias champion en la UI de MLflow:**
+
+Cada modelo registrado aparece en la sección **Models** de MLflow con:
+- Alias `champion` → versión en producción (stage `Production`).
+- Tags de linaje: `run_origen`, `git_commit`, `datos_version`, `pregunta`, `metrica_test`, `valor_metrica_test`.
+- Descripción con el rendimiento frente al baseline y el costo de entrenamiento/inferencia.
 
 
