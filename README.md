@@ -483,7 +483,7 @@ mlflow run . -e ingest --env-manager local --experiment-name mibici-equipo20
 
 # 4. Entrenar modelos para producción
 python run_train.py train --pregunta p1 --versiones baseline,lgbm_tweedie
-python run_train.py train --pregunta p2 --versiones baseline,logistic_sin_peso
+python run_train.py train --pregunta p2 --versiones baseline,gbm
 python run_train.py train --pregunta p3 --versiones baseline,kmeans_k4
 ```
 
@@ -520,7 +520,7 @@ python run_train.py train --pregunta <p1|p2|p3> [--versiones <lista>]
 python run_train.py train --pregunta p2
 
 # Solo baseline y el mejor candidato de P2
-python run_train.py train --pregunta p2 --versiones baseline,logistic_sin_peso
+python run_train.py train --pregunta p2 --versiones baseline,gbm
 
 # Búsqueda anidada de P2
 python run_train.py train --pregunta p2 --versiones logistic_search
