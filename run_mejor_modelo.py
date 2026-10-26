@@ -57,33 +57,16 @@ MODELOS_A_REGISTRAR = [
         "pregunta": "P2",
         "descripcion": (
             "Modelo de produccion para P2 (riesgo de desbalance de estacion). "
-            "Regresion Logistica con class_weight=balanced y umbral de decision 0.5 "
-            "sobre las variables de riesgo P2. Seleccionado por mejor Test F1 "
-            "(0.833) y PR-AUC (0.842) frente a Regresion Logistica sin peso "
-            "(class_weight=None) y al umbral sensible (0.3)."
+            "HistGradientBoostingClassifier (Gradient Boosting) con valores por defecto "
+            "y umbral de decision 0.5 sobre las variables de riesgo P2. Seleccionado por "
+            "mejor Test F1 (0.865) y Test PR-AUC (0.942), superando al baseline de "
+            "persistencia (F1 0.833) y a Regresion Logistica (F1 0.832 / PR-AUC 0.806)."
         ),
         "metrica_test": "test_f1_score",
         "predicado": lambda tags, params, metrics: (
             tags.get("question") == "P2"
-            and "logistic" in str(params.get("modelo", "")).lower()
-            and str(params.get("class_weight", "")) in ("balanced", "None")
-            and str(params.get("umbral", "")) == "0.5"
-        ),
-    },
-    {
-        "name": "mibici-equipo20-p2-riesgo-gbm",
-        "pregunta": "P2",
-        "descripcion": (
-            "Modelo de produccion para P2 (riesgo de desbalance de estacion). "
-            "HistGradientBoostingClassifier (Gradient Boosting) con early stopping, "
-            "optimizado por PR-AUC en validacion via nested runs. "
-            "Variables de riesgo P2. Seleccionado por mejor Test PR-AUC y F1 "
-            "frente a Regresion Logistica."
-        ),
-        "metrica_test": "test_pr_auc",
-        "predicado": lambda tags, params, metrics: (
-            tags.get("question") == "P2"
             and "histgradientboosting" in str(params.get("modelo", "")).lower()
+            and tags.get("version") == "v1_gbm"
         ),
     },
     {
