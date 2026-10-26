@@ -8,9 +8,9 @@ Solución integral de Machine Learning para el análisis, modelado predictivo y 
 
 | Pregunta | Tipo de Problema | Objetivo de Negocio / Técnico | Algoritmo y Pipeline |
 |---|---|---|---|
-| **P1** | Regresión Temporal | Estimar el volumen de demanda horaria de viajes por estación para la hora inmediata ($t+1$). | `StandardScaler` + `LinearRegression` con cota inferior recortada en $\ge 0$. |
-| **P2** | Clasificación Binaria | Predecir si una estación entrará en estado de desbalance crítico (vacía o saturada) en $t+1$. | `StandardScaler` + `LogisticRegression` balanceada con umbral de decisión operativo calibrable. |
-| **P3** | Clustering No Supervisado | Identificar perfiles funcionales de uso en estaciones y contrastar el agrupamiento contra la división municipal (línea base). | `StandardScaler` + `KMeans` ($K=4$) evaluado con coeficientes de Silhouette y Davies-Bouldin. |
+| **P1** | Regresión Temporal | Estimar el volumen de demanda horaria de viajes por estación para la hora inmediata ($t+1$). | Baseline: `StandardScaler` + `LinearRegression`; Campeón: `LightGBM Tweedie`. |
+| **P2** | Clasificación Binaria | Predecir si una estación entrará en estado de desbalance crítico (vacía o saturada) en $t+1$. | Baseline: `StandardScaler` + `LogisticRegression` balanceada; Campeón: `HistGradientBoostingClassifier` (GBM). |
+| **P3** | Clustering No Supervisado | Identificar perfiles funcionales de uso en estaciones y contrastar el agrupamiento contra la división municipal (línea base). | Baseline: agrupación por municipio; Campeón: `StandardScaler` + `KMeans` ($K=4$). |
 
 ---
 
@@ -173,38 +173,64 @@ mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./
 ---
 
 ### P1: Entrenamiento de Demanda Horaria (Regresión)
+Ejecuta un modelo individual:
+
 ```bash
-python -m proyecto_mibici.modeling.train_p1
+python -m proyecto_mibici.modeling.train_p1 --model <nombre> --lr <learning_rate> --alpha <alpha> --max_iter <max_iter>
 ```
+
+Modelos disponibles:
+
+| `--model` | Descripción | Etapa |
+|---|---|---|
+| `baseline` | Regresión Lineal con medias móviles (línea base) | Baseline |
+| `poisson` | Regresión de Poisson | Candidato |
+| `lgbm_poisson` | LightGBM objective=poisson | Candidato |
+| `lgbm_p_search` | Búsqueda anidada de hiperparámetros (objective=poisson) | Search |
+| `lgbm_tweedie` | LightGBM objective=tweedie (campeón) | Candidato |
+| `lgbm_t_search` | Búsqueda anidada de hiperparámetros (objective=tweedie) | Search |
 
 - **Parámetros registrados en MLflow:**
   * `pregunta`: `"P1"`
-  * `modelo`: `"DemandaLinealP1"`
+  * `modelo`: Nombre del modelo (`DemandaLinealP1`, `PoissonRegression`, `LightGBM_poisson`, `LightGBM_tweedie`, etc.)
   * `features`: Lista de rezagos (`lag_1h`, `lag_24h`, `lag_168h`), medias móviles (`rolling_3h`, `rolling_168h`) y variables de calendario (`target_hour_sin`, `target_hour_cos`, `target_is_weekend`).
   * `train_inicio`, `train_fin`, `validation_inicio`, `validation_fin`, `test_inicio`, `test_fin`: Límites cronológicos exactos de cada partición.
   * `datos_version`: Hash SHA-256 corto del dataset procesado.
-- **Métricas registradas:** `train_mae`, `train_rmse`, `test_mae`, `test_rmse`.
+- **Métricas registradas:** `train_mae`, `train_rmse`, `test_mae`, `test_rmse`, `test_wape`, `test_sesgo`.
 - **Artefactos generados:**
-  * Local: `models/p1_linear_model.pkl`
-  * MLflow: Pipeline scikit-learn con firma de entrada/salida, `manifest.json`, gráfica de serie temporal (`penitenciaria_real_vs_pred_v2_lineal_rolling.png`) y gráfico de dispersión global (`scatter_test_v2_lineal_rolling.png`).
+  * Local: `models/p1_linear_model.pkl` (baseline) / `models/p1_poisson_model.pkl` / modelos LightGBM.
+  * MLflow: Pipeline scikit-learn con firma de entrada/salida, `manifest.json`, gráfica de serie temporal y gráfico de dispersión global.
 
 ---
 
 ### P2: Entrenamiento de Riesgo de Desbalance (Clasificación)
+Ejecuta un modelo individual:
+
 ```bash
-python -m proyecto_mibici.modeling.train_p2
+python -m proyecto_mibici.modeling.train_p2 --modelo <nombre> --umbral <umbral> --class-weight <peso> --max-iter <iter>
 ```
+
+Modelos disponibles:
+
+| `--modelo` | Descripción | Etapa |
+|---|---|---|
+| `baseline` | Persistencia ingenua (línea base) | Baseline |
+| `logistic` | Regresión Logística (balanced / None) | Candidato |
+| `logistic_search` | Búsqueda anidada de hiperparámetros (logística) | Search |
+| `gbm` | `HistGradientBoostingClassifier` (campeón) | Candidato |
+| `gbm_search` | Búsqueda anidada de hiperparámetros (GBM) | Search |
 
 - **Parámetros registrados en MLflow:**
   * `pregunta`: `"P2"`
-  * `modelo`: `"RiesgoLogisticoP2"`
-  * `umbral`: `0.5` (umbral de saturación/vaciamiento respecto a la capacidad de la estación).
-  * `variables`: Variables predictoras (`hora_del_dia`, `fin_de_semana`, `acumulado_relativo`, `balance_ult_3h_relativo`).
+  * `modelo`: `LogisticRegression` o `HistGradientBoostingClassifier`
+  * `umbral`: Umbral de decisión de riesgo (por defecto 0.5).
+  * `class_weight`: Peso de clases para Regresión Logística (`balanced` o `None`).
+  * `max_iter`: Iteraciones máximas.
   * `train_inicio`, `train_fin`, `validation_inicio`, `validation_fin`, `test_inicio`, `test_fin` y `datos_version`.
 - **Métricas registradas:** `train_precision`, `train_recall`, `train_f1_score`, `train_pr_auc`, `test_precision`, `test_recall`, `test_f1_score`, `test_pr_auc`.
 - **Artefactos generados:**
-  * Local: `models/p2_logistic_model.pkl`
-  * MLflow: Pipeline scikit-learn con firma de datos, `manifest.json`, matriz de confusión (`matriz_confusion_v1_logistic.png`) y curva Precision-Recall (`curva_pr_v1_logistic.png`).
+  * Local: `models/p2_logistic_model.pkl` / `models/p2_gbm_model.pkl`.
+  * MLflow: Pipeline scikit-learn con firma de datos, `manifest.json`, matriz de confusión y curva Precision-Recall.
 
 ---
 
@@ -436,7 +462,10 @@ mlflow run . -e train_p2 --env-manager local --experiment-name mibici-equipo20 -
 
 ```bash
 mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=baseline
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=3 -P n_init=10
 mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=4 -P n_init=10
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=5 -P n_init=10
+mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans -P n_clusters=6 -P n_init=10
 mlflow run . -e train_p3 --env-manager local --experiment-name mibici-equipo20 -P modelo=kmeans_search -P n_init=10
 ```
 

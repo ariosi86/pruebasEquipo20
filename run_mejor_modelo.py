@@ -171,21 +171,33 @@ def registrar_modelo(client: MlflowClient, entrada: dict, run_info: dict) -> Non
     client.update_model_version(nombre, version, description=desc_version)
 
     # Promocionar a Produccion (alias champion y stage Production)
+    alias_ok = False
     try:
         client.set_registered_model_alias(nombre, "champion", str(version))
+        alias_ok = True
+        logger.info(f"Alias 'champion' asignado a version {version} de {nombre}.")
     except Exception as e:
         logger.warning(f"No se pudo asignar alias champion: {e}")
+
+    stage_ok = False
     try:
         client.transition_model_version_stage(
             name=nombre, version=version, stage="Production"
         )
+        stage_ok = True
     except Exception as e:
         logger.warning(f"No se pudo transicionar a stage Production: {e}")
 
-    logger.success(
-        f"{nombre} version {version} registrado y promovido a Production/champion "
-        f"(run_origen={run_id}, commit={run_info['commit']}, datos_version={run_info['datos_version']})"
-    )
+    if alias_ok or stage_ok:
+        logger.success(
+            f"{nombre} version {version} registrado y promovido a Production/champion "
+            f"(run_origen={run_id}, commit={run_info['commit']}, datos_version={run_info['datos_version']})"
+        )
+    else:
+        logger.error(
+            f"{nombre} version {version} registrado pero NO se pudo promover a Production/champion. "
+            f"Revisar permisos de MLflow Model Registry (run_origen={run_id})."
+        )
 
 
 def main() -> None:
