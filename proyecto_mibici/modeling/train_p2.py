@@ -17,6 +17,8 @@ import os
 import subprocess
 import sys
 
+import joblib
+
 import mlflow
 import numpy as np
 import pandas as pd
@@ -140,7 +142,7 @@ def main(
         modelo_naive = BaselinePersistenciaP2(col_persistencia="en_riesgo")
 
         ruta_modelo = MODELS_DIR / "p2_baseline_model.pkl"
-        modelo_naive.save(ruta_modelo)
+        joblib.dump(modelo_naive, ruta_modelo)
         logger.info(f"Modelo P2 baseline guardado exitosamente en {ruta_modelo}")
 
         pred_train_naive = modelo_naive.predict(df_train)
