@@ -25,6 +25,8 @@ seaborn>=0.13.2
 
 # Pruebas y testing
 pytest>=7.4.0
+bandit>=1.9.4
+pip-audit>=2.10.1
 
 # Notebooks y exploración
 ipykernel>=6.29.0
