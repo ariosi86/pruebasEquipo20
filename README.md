@@ -652,7 +652,7 @@ pytest -k "reproducible"                  # solo pruebas cuyo nombre contenga la
 | `test_model_p1.py` | `DemandaLinealP1` y `DemandaPoissonP1` | `fit`/`predict` con forma correcta y sin negativos; el pipeline expone el `scaler`; usa solo las `features` indicadas; falla si faltan columnas; `save`/`load` conserva las predicciones; la regresión lineal recupera una relación exacta |
 | `test_train_p1.py` | `evaluar_metricas_regresion` | MAE, RMSE, WAPE y sesgo verificados contra valores calculados a mano; caso con reales en cero |
 | `test_train_p1.py` | `calcular_metricas_por_estacion` y `registrar_fila_comparacion` | Una fila por estación; error absoluto total; unión con el catálogo de nombres; no modifica la entrada |
-| `test_train_p1.py` | **Reproducibilidad del entrenamiento** | Con la misma semilla, LightGBM, regresión lineal y Poisson producen predicciones idénticas; con submuestreo activo, otra semilla produce resultados distintos; las métricas de dos entrenamientos coinciden |
+| `test_train_p1.py` | **Reproducibilidad del entrenamiento** | 	Con la misma semilla, LightGBM (objetivos Poisson y Tweedie), regresión lineal y Poisson producen predicciones idénticas; con submuestreo activo, otra semilla produce resultados distintos; las métricas de dos entrenamientos coinciden |
 | `test_predict_p1.py` | `predecir_todos_los_modelos`, `generar_reporte_inferencia`, `cargar_modelo` | Columnas esperadas (4 baselines, v1, v2 y alias `demanda_predicha`); longitud correcta, sin NaN ni negativos; el alias coincide con v2; un modelo guardado y cargado predice igual que el original; fallback a `p1_linear_model.pkl`; error claro si falta el modelo o faltan columnas; no modifica la entrada; resultado determinista |
 
 > Las pruebas de inferencia guardan los modelos en una carpeta temporal (`tmp_path`), por lo que no tocan el directorio `models/` real.
@@ -668,9 +668,10 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 ![Ejecución de PyTest](docs/images/test_features_p1.png)
 
-#### test_train_p1.py - 15 pruebas aprobadas
+#### test_train_p1.py - 18 pruebas aprobadas
 
 ![Ejecución de PyTest](docs/images/test_train_p1.png)
+
 
 #### test_model_p1.py - 17 pruebas aprobadas
 
