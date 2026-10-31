@@ -627,6 +627,21 @@ tests/
 - `test_predict_p1.py`: Pipeline de inferencia y generación de reportes.
 - `test_train_p1.py`: Pruebas de reproducibilidad con semillas fijas y métricas.
 
+#### P2
+
+Las pruebas de P2 se ubican en la carpeta `tests/` de la raíz:
+```text
+tests/
+├── test_features_p2.py           # ingeniería de características de P2
+├── test_model_p2.py              # modelos de P2 (baseline de persistencia y GBM)
+├── test_reproducibilidad_p2.py   # reproducibilidad del entrenamiento del GBM
+└── test_deepchecks_p2.py         # validación de datos con DeepChecks (dataset real)
+```
+- `test_features_p2.py`: Limpieza de viajes, flujo por estación y hora, serie de riesgo y partición temporal.
+- `test_model_p2.py`: Predicciones del baseline y del GBM, errores esperados y guardado/carga del modelo.
+- `test_reproducibilidad_p2.py`: Pruebas de reproducibilidad del GBM con semilla fija y métricas.
+- `test_deepchecks_p2.py`: Integridad del dataset de P2 y drift entre entrenamiento, validación y prueba.
+
 ### Instrucciones de Ejecución
 
 1. **Ejecutar suite completa de pruebas:**
@@ -641,6 +656,18 @@ pytest -k "reproducible"                  # solo pruebas cuyo nombre contenga la
 ```
 
 > Las pruebas **no usan el dataset real de MiBici**. Usan DataFrames pequeños y sintéticos definidos en `tests/conftest.py`, por lo que corren en pocos segundos y no dependen de archivos externos ni de MLflow.
+
+2. **Ejecutar las pruebas de P2:**
+```bash
+pip install pytest deepchecks==0.19.1     # (o: pip install -r requirements.txt)
+pytest tests -v -k p2                      # todas las pruebas de P2
+pytest tests/test_features_p2.py -v        # prueba por archivo
+pytest tests/test_model_p2.py -v
+pytest tests/test_reproducibilidad_p2.py -v
+pytest tests/test_deepchecks_p2.py -v
+```
+
+> Las pruebas unitarias y de reproducibilidad de P2 también usan datos sintéticos y no necesitan MLflow. Solo `test_deepchecks_p2.py` usa el dataset real (ver *Validación de datos (DeepChecks)*).
 
 ### Qué se prueba (P1: demanda horaria)
 
@@ -657,9 +684,23 @@ pytest -k "reproducible"                  # solo pruebas cuyo nombre contenga la
 
 > Las pruebas de inferencia guardan los modelos en una carpeta temporal (`tmp_path`), por lo que no tocan el directorio `models/` real.
 
+### Qué se prueba (P2: riesgo de desbalance)
+
+| Archivo | Componente | Casos cubiertos |
+|---|---|---|
+| `test_features_p2.py` | `LimpiadorFlujoP2` | Cuenta salidas y llegadas por estación y hora; elimina viajes duplicados; elimina viajes de menos de 10 s entre estaciones distintas pero conserva los de la misma estación; conserva el viaje de 10 s exactos; descarta horas posteriores al fin del periodo |
+| `test_features_p2.py` | `ConstructorSerieRiesgoP2` | Rellena con 0 las horas sin movimiento y acumula el balance; riesgo exactamente en el umbral (±50 % de la capacidad); el objetivo es el riesgo de la hora siguiente; el acumulado se reinicia a las 3:00 (día operativo); excluye estaciones sin capacidad; marca estaciones nuevas; la partición se decide por la hora del objetivo, sin fuga de información |
+| `test_model_p2.py` | `BaselinePersistenciaP2` | Predice el estado actual (`en_riesgo`) con probabilidades 0 o 1; falla con `KeyError` si falta la columna |
+| `test_model_p2.py` | `RiesgoGBMP2` | Entrena y predice clases válidas con probabilidades que suman 1; falla con `ValueError` si se predice sin entrenar; usa solo las variables indicadas, sin importar columnas extra ni su orden; `save`/`load` conserva las predicciones |
+| `test_reproducibilidad_p2.py` | **Reproducibilidad del entrenamiento** | Dos entrenamientos del GBM con `RANDOM_SEED` producen predicciones, probabilidades, F1, PR-AUC y número de iteraciones idénticos; con otra semilla las probabilidades cambian (control) |
+
+> Las pruebas de guardado y carga de P2 también usan una carpeta temporal (`tmp_path`).
+
 ### Reproducibilidad
 
 El entrenamiento usa `RANDOM_SEED` (definido en `config.py`). Las pruebas de la sección *Reproducibilidad del entrenamiento* entrenan el mismo modelo dos veces con la misma semilla y verifican que las predicciones sean exactamente iguales (`np.testing.assert_array_equal`).
+
+En P2, el azar del GBM viene de `early_stopping`, que aparta al azar un 10 % de los datos para decidir cuándo detener el entrenamiento; la semilla fija ese sorteo. `test_reproducibilidad_p2.py` entrena el GBM dos veces con `RANDOM_SEED` y verifica que predicciones, probabilidades y métricas sean idénticas. Como control, verifica que con otra semilla el resultado cambie; si no cambiara, la prueba anterior pasaría aunque el modelo ignorara la semilla.
 
 ### Resultados esperados
 Resultado esperado: todas las pruebas en verde (PASSED) al final.
@@ -681,10 +722,43 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 ![Ejecución de PyTest](docs/images/test_predict_p1.png)
 
+#### P2 - 25 pruebas aprobadas
+
+![Ejecución de PyTest P2](docs/images/evidencia_pytest_p2.png)
+
 
 ### Validación de datos (DeepChecks)
 
 _Pendiente: documentar aquí los chequeos de integridad y de drift entre train/test, y cómo ejecutarlos._
+
+#### P2
+
+`tests/test_deepchecks_p2.py` valida el dataset **real** de P2 (4.8 M de filas), construido con `construir_dataset_p2()` a partir de los Parquet de `data/processed/`. Si esos archivos no existen, las pruebas se omiten (SKIPPED) en lugar de fallar; para generarlos: `python -m proyecto_mibici.dataset`.
+
+```bash
+pytest tests/test_deepchecks_p2.py -v
+```
+
+| Prueba | Qué valida |
+|---|---|
+| `test_integridad_del_dataset_p2` | Sin nulos, sin tipos mezclados, sin columnas constantes, 0 duplicados de estación y hora, y ninguna variable que prediga el objetivo por sí sola (PPS < 0.8) |
+| `test_reglas_de_dominio_p2` | Capacidad > 0, salidas y llegadas ≥ 0, horas de 0 a 23, días de 0 a 6 y objetivo solo verdadero o falso |
+| `test_sin_drift_ni_fuga_temporal[validacion]` | Entrenamiento contra validación: drift de variables, del objetivo y multivariado; ninguna fecha de validación dentro de entrenamiento |
+| `test_sin_drift_ni_fuga_temporal[prueba]` | Lo mismo, entrenamiento contra prueba |
+
+**Resultados:**
+- 0 nulos y 0 duplicados de estación y hora en las 4.8 M de filas.
+- Drift bajo: máximo 0.05 por variable (límite 0.2), 0.04 en el objetivo (límite 0.15) y 0.08 multivariado (límite 0.25).
+- Ninguna fecha de validación ni de prueba cae dentro del periodo de entrenamiento.
+- La proporción de horas en riesgo baja de 13.1 % en entrenamiento a 10.2 % en prueba, un cambio leve que no supera los límites de drift.
+
+DeepChecks guarda tres reportes HTML en `reports/deepchecks/` (`p2_integridad.html`, `p2_drift_validacion.html` y `p2_drift_prueba.html`), que se sobrescriben en cada corrida. No se suben al repositorio porque `reports/` está en el `.gitignore`.
+
+> **Nota técnica:** DeepChecks 0.19.1 usa `np.Inf` y `np.NaN`, que numpy 2 eliminó. `test_deepchecks_p2.py` restaura esos dos alias antes de importarlo, sin modificar nada fuera de la prueba.
+
+![DeepChecks: integridad del dataset de P2](docs/images/evidencia_deepchecks_integridad_p2.png)
+
+![DeepChecks: drift entre entrenamiento y prueba de P2](docs/images/evidencia_deepchecks_drift_p2.png)
 
 ### Chequeos de seguridad
 
