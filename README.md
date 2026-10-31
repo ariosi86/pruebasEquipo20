@@ -641,6 +641,20 @@ tests/
 - `test_model_p2.py`: Predicciones del baseline y del GBM, errores esperados y guardado/carga del modelo.
 - `test_reproducibilidad_p2.py`: Pruebas de reproducibilidad del GBM con semilla fija y métricas.
 - `test_deepchecks_p2.py`: Integridad del dataset de P2 y drift entre entrenamiento, validación y prueba.
+#### P3
+
+Las pruebas de P3 se ubican en la carpeta `tests/` de la raíz:
+```text
+tests/
+├── test_features_p3.py           # limpieza de viajes y perfil funcional de estaciones
+├── test_model_p3.py              # modelos de P3 (baseline por municipio y KMeans)
+├── test_reproducibilidad_p3.py   # reproducibilidad del entrenamiento de KMeans
+└── test_deepchecks_p3.py         # validación de datos con DeepChecks (dataset real)
+```
+- `test_features_p3.py`: Limpieza de viajes (duplicados, duración y catálogo) y construcción del perfil de cada estación.
+- `test_model_p3.py`: Asignación de grupos del baseline y de KMeans, errores esperados y guardado/carga del modelo.
+- `test_reproducibilidad_p3.py`: Reproducibilidad de KMeans con semilla fija y control con otra semilla.
+- `test_deepchecks_p3.py`: Integridad del perfil de estaciones y drift entre entrenamiento (2025) y prueba (may-sep 2026).
 
 ### Instrucciones de Ejecución
 
@@ -668,6 +682,17 @@ pytest tests/test_deepchecks_p2.py -v
 ```
 
 > Las pruebas unitarias y de reproducibilidad de P2 también usan datos sintéticos y no necesitan MLflow. Solo `test_deepchecks_p2.py` usa el dataset real (ver *Validación de datos (DeepChecks)*).
+3. **Ejecutar las pruebas de P3:**
+```bash
+pip install deepchecks==0.19.1 "scikit-learn>=1.5.1,<1.8" "setuptools<81"
+pytest tests -v -k p3                        # todas las pruebas de P3
+pytest tests/test_features_p3.py -v          # prueba por archivo
+pytest tests/test_model_p3.py -v
+pytest tests/test_reproducibilidad_p3.py -v
+pytest tests/test_deepchecks_p3.py -v
+```
+
+> Las pruebas unitarias y de reproducibilidad de P3 usan datos sintéticos y no necesitan MLflow. Solo `test_deepchecks_p3.py` usa el dataset real (ver *Validación de datos (DeepChecks)*). DeepChecks 0.19.1 no importa con scikit-learn 1.8 o superior y requiere `setuptools<81`.
 
 ### Qué se prueba (P1: demanda horaria)
 
@@ -695,12 +720,24 @@ pytest tests/test_deepchecks_p2.py -v
 | `test_reproducibilidad_p2.py` | **Reproducibilidad del entrenamiento** | Dos entrenamientos del GBM con `RANDOM_SEED` producen predicciones, probabilidades, F1, PR-AUC y número de iteraciones idénticos; con otra semilla las probabilidades cambian (control) |
 
 > Las pruebas de guardado y carga de P2 también usan una carpeta temporal (`tmp_path`).
+### Qué se prueba (P3: clustering de estaciones)
+
+| Archivo | Componente | Casos cubiertos |
+|---|---|---|
+| `test_features_p3.py` | `limpiar_viajes_p3` | Calcula la duración en minutos; elimina viajes con `viaje_id` duplicado; elimina viajes de 0 min y de más de 180 min, y conserva el de 180 min exactos; elimina viajes con origen o destino fuera del catálogo |
+| `test_features_p3.py` | `construir_perfil_estaciones` | Genera todas las variables de `P3_VARIABLES` con una fila por estación; las proporciones por rango horario suman 1; valores verificados a mano (`pct_manana`, `pct_fin_de_semana`, `duracion_media`, `balance_neto`); `pct_fin_de_semana` en [0, 1] y `balance_neto` en [-1, 1]; descarta estaciones con menos viajes que el mínimo; crea en 0 la columna de un rango horario sin viajes |
+| `test_model_p3.py` | `BaselineMunicipioP3` | Un grupo por municipio en orden; usa el catálogo de estaciones si falta la columna; municipio no visto recibe -1; falla con `KeyError` sin municipio ni catálogo y con `ValueError` si predice sin entrenar |
+| `test_model_p3.py` | `ClusterKMeansP3` | Una etiqueta válida por estación; recupera cuatro grupos sintéticos bien separados (ARI = 1); el `StandardScaler` está dentro del pipeline y aprende la media de entrenamiento; usa solo las variables indicadas, sin importar columnas extra ni su orden; falla con `ValueError` si predice sin entrenar; `save`/`load` conserva las etiquetas |
+| `test_reproducibilidad_p3.py` | **Reproducibilidad del entrenamiento** | Dos entrenamientos de KMeans con `RANDOM_SEED` producen etiquetas, centros, silhouette y Davies-Bouldin idénticos; con otra semilla los centros cambian (control) |
+
+> **Hallazgo:** la prueba `test_perfil_con_un_rango_horario_sin_viajes` detectó que `pd.crosstab` solo creaba columnas para los rangos horarios presentes en los datos. En un periodo sin viajes nocturnos, `pct_noche` no existía y el entrenamiento fallaba con `KeyError`. Se corrigió en `features_p3.py` con `reindex` sobre los cinco rangos horarios; con los datos completos el resultado no cambia.
 
 ### Reproducibilidad
 
 El entrenamiento usa `RANDOM_SEED` (definido en `config.py`). Las pruebas de la sección *Reproducibilidad del entrenamiento* entrenan el mismo modelo dos veces con la misma semilla y verifican que las predicciones sean exactamente iguales (`np.testing.assert_array_equal`).
 
 En P2, el azar del GBM viene de `early_stopping`, que aparta al azar un 10 % de los datos para decidir cuándo detener el entrenamiento; la semilla fija ese sorteo. `test_reproducibilidad_p2.py` entrena el GBM dos veces con `RANDOM_SEED` y verifica que predicciones, probabilidades y métricas sean idénticas. Como control, verifica que con otra semilla el resultado cambie; si no cambiara, la prueba anterior pasaría aunque el modelo ignorara la semilla.
+En P3, el azar de KMeans está en la posición inicial de los centros. `test_reproducibilidad_p3.py` usa perfiles sintéticos sin grupos marcados y un solo arranque (`n_init=1`), que es el caso en que la semilla decide el resultado. Con `RANDOM_SEED` dos entrenamientos dan etiquetas, centros y métricas idénticos; con otra semilla los centros cambian, lo que confirma que la igualdad se debe a la semilla.
 
 ### Resultados esperados
 Resultado esperado: todas las pruebas en verde (PASSED) al final.
@@ -727,6 +764,10 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 ![Ejecución de PyTest P2](docs/images/evidencia_pytest_p2.png)
 
 
+#### P3 - 28 pruebas aprobadas
+
+![Ejecución de PyTest P3](docs/images/evidencia_pytest_p3.png)
+
 ### Validación de datos (DeepChecks)
 
 _Pendiente: documentar aquí los chequeos de integridad y de drift entre train/test, y cómo ejecutarlos._
@@ -737,6 +778,12 @@ _Pendiente: documentar aquí los chequeos de integridad y de drift entre train/t
 
 ```bash
 pytest tests/test_deepchecks_p2.py -v
+#### P3
+
+`tests/test_deepchecks_p3.py` valida el perfil **real** de estaciones que entra a KMeans, construido con las mismas funciones y fechas de `config.py` que `train_p3.py`: entrenamiento con 2025 y prueba con mayo a septiembre de 2026. P3 no tiene variable objetivo, así que los tests usan solo las ocho variables de `P3_VARIABLES`. Si los Parquet de `data/processed/` no existen, las pruebas se omiten (SKIPPED).
+
+```bash
+pytest tests/test_deepchecks_p3.py -v
 ```
 
 | Prueba | Qué valida |
@@ -759,6 +806,24 @@ DeepChecks guarda tres reportes HTML en `reports/deepchecks/` (`p2_integridad.ht
 ![DeepChecks: integridad del dataset de P2](docs/images/evidencia_deepchecks_integridad_p2.png)
 
 ![DeepChecks: drift entre entrenamiento y prueba de P2](docs/images/evidencia_deepchecks_drift_p2.png)
+| `test_integridad_del_perfil_p3[entrenamiento]` | Sin nulos, sin tipos mezclados, ninguna variable constante y ninguna estación con perfil duplicado |
+| `test_integridad_del_perfil_p3[prueba]` | Lo mismo para el perfil de prueba |
+| `test_reglas_de_dominio_p3` | Una fila por estación; proporciones horarias que suman 1; `pct_fin_de_semana` en [0, 1]; `balance_neto` en [-1, 1]; duración media entre 0 y 180 min |
+| `test_estaciones_de_2025_siguen_operando_en_2026` | Al menos 95 % de las estaciones de entrenamiento siguen activas en prueba |
+| `test_sin_drift_en_las_estaciones_comunes` | Drift por variable (Kolmogorov-Smirnov < 0.2) y multivariado (< 0.25) entre los dos periodos, sobre las estaciones presentes en ambos |
+
+**Resultados:**
+- Perfiles limpios en ambos periodos: 0 nulos, 0 duplicados y ninguna variable constante.
+- 371 estaciones en entrenamiento y 469 en prueba. De las 371 de 2025, 370 siguen operando en 2026; las 99 restantes de prueba son estaciones nuevas de la expansión de MiBici.
+- Sistema completo (reporte informativo, sin condición): ninguna variable supera 0.2 por separado (máximo `pct_fin_de_semana`, 0.16), pero el drift multivariado es 0.33 (AUC del clasificador de dominio 0.66). Las variables que más distinguen los periodos son `viajes_dia_log` (36 %), `balance_neto` (28 %) y `pct_noche` (25 %), consistentes con estaciones recién abiertas y con menos viajes.
+- Estaciones comunes (prueba con condición): máximo drift por variable 0.16 en `duracion_media` y drift multivariado 0.23 (AUC 0.62), debajo del límite de 0.25. Las 370 estaciones conservan su forma de uso, así que los grupos aprendidos en 2025 siguen siendo válidos para ellas.
+- El drift multivariado de las estaciones comunes queda cerca del límite, impulsado por `duracion_media` y `balance_neto`. Conviene vigilarlo en el monitoreo de drift de la semana 10.
+
+DeepChecks guarda cuatro reportes HTML en `reports/deepchecks/` (`p3_integridad_entrenamiento.html`, `p3_integridad_prueba.html`, `p3_drift_todas_las_estaciones.html` y `p3_drift_estaciones_comunes.html`), que se sobrescriben en cada corrida y no se suben al repositorio porque `reports/` está en el `.gitignore`.
+
+![DeepChecks: integridad del perfil de estaciones de P3 (entrenamiento)](docs/images/evidencia_deepchecks_integridad_p3.png)
+
+![DeepChecks: drift de P3 en las estaciones presentes en ambos periodos](docs/images/evidencia_deepchecks_drift_p3.png)
 
 ### Chequeos de seguridad
 
