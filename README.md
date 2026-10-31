@@ -602,4 +602,106 @@ Cada modelo registrado aparece en la sección **Models** de MLflow con:
 - Tags de linaje: `run_origen`, `git_commit`, `datos_version`, `pregunta`, `metrica_test`, `valor_metrica_test`.
 - Descripción con el rendimiento frente al baseline y el costo de entrenamiento/inferencia.
 
+---
 
+## Pruebas Automatizadas y Gobernanza de Código
+
+Para garantizar la calidad, reproducibilidad y seguridad del proyecto, el repositorio cuenta con un conjunto de pruebas automatizadas con **PyTest** y chequeos de seguridad.
+
+### Estructura de Pruebas
+
+#### P1
+
+
+Las pruebas se ubican en la carpeta `tests/` organizadas por componentes:
+```text
+tests/
+├── conftest.py            # datos sintéticos reutilizables (fixtures)
+├── test_features_p1.py    # ingeniería de características de P1
+├── test_model_p1.py       # modelos de P1 (baseline, lineal, Poisson)
+├── test_train_p1.py       # métricas de evaluación y reproducibilidad del entrenamiento
+└── test_predict_p1.py     # inferencia: carga de modelos y generación de predicciones
+```
+- `test_features_p1.py`: Limpieza de datos y generación de rezagos/malla horaria.
+- `test_model_p1.py`: Reglas de negocio y restricciones de los modelos.
+- `test_predict_p1.py`: Pipeline de inferencia y generación de reportes.
+- `test_train_p1.py`: Pruebas de reproducibilidad con semillas fijas y métricas.
+
+### Instrucciones de Ejecución
+
+1. **Ejecutar suite completa de pruebas:**
+```bash
+pip install pytest          # (o: pip install -r requirements.txt)
+pytest -v                   # todas las pruebas, con detalle
+pytest proyecto_mibici/tests/test_features_p1.py -v #prueba por archivo
+pytest proyecto_mibici/tests/test_model_p1.py -v
+pytest proyecto_mibici/tests/test_predict_p1.py -v
+pytest proyecto_mibici/tests/test_train_p1.py -v
+pytest -k "reproducible"                  # solo pruebas cuyo nombre contenga la palabra
+```
+
+> Las pruebas **no usan el dataset real de MiBici**. Usan DataFrames pequeños y sintéticos definidos en `tests/conftest.py`, por lo que corren en pocos segundos y no dependen de archivos externos ni de MLflow.
+
+### Qué se prueba (P1: demanda horaria)
+
+| Archivo | Componente | Casos cubiertos |
+|---|---|---|
+| `test_features_p1.py` | `LimpiadorFiltroEstacionesP1` | Elimina duplicados; descarta estaciones fuera de catálogo; descarta estaciones con exceso de horas vacías; falla si hay `viaje_id` repetido con datos distintos |
+| `test_features_p1.py` | `GeneradorDemandaLagsP1` | Crea las columnas esperadas; sin nulos en rezagos ni target; rellena con 0 las horas sin viajes; semántica correcta de `lag_24h` y `lag_168h`; variables cíclicas en rango [-1, 1]; no modifica la entrada; resultado determinista; con pocos datos devuelve vacío sin error |
+| `test_model_p1.py` | `BaselineIngenuoP1` | Estrategias `persistencia` y `promedio_24h_168h`; nulos tratados como 0; nunca predice negativos; estrategia inválida lanza `ValueError` |
+| `test_model_p1.py` | `DemandaLinealP1` y `DemandaPoissonP1` | `fit`/`predict` con forma correcta y sin negativos; el pipeline expone el `scaler`; usa solo las `features` indicadas; falla si faltan columnas; `save`/`load` conserva las predicciones; la regresión lineal recupera una relación exacta |
+| `test_train_p1.py` | `evaluar_metricas_regresion` | MAE, RMSE, WAPE y sesgo verificados contra valores calculados a mano; caso con reales en cero |
+| `test_train_p1.py` | `calcular_metricas_por_estacion` y `registrar_fila_comparacion` | Una fila por estación; error absoluto total; unión con el catálogo de nombres; no modifica la entrada |
+| `test_train_p1.py` | **Reproducibilidad del entrenamiento** | 	Con la misma semilla, LightGBM (objetivos Poisson y Tweedie), regresión lineal y Poisson producen predicciones idénticas; con submuestreo activo, otra semilla produce resultados distintos; las métricas de dos entrenamientos coinciden |
+| `test_predict_p1.py` | `predecir_todos_los_modelos`, `generar_reporte_inferencia`, `cargar_modelo` | Columnas esperadas (4 baselines, v1, v2 y alias `demanda_predicha`); longitud correcta, sin NaN ni negativos; el alias coincide con v2; un modelo guardado y cargado predice igual que el original; fallback a `p1_linear_model.pkl`; error claro si falta el modelo o faltan columnas; no modifica la entrada; resultado determinista |
+
+> Las pruebas de inferencia guardan los modelos en una carpeta temporal (`tmp_path`), por lo que no tocan el directorio `models/` real.
+
+### Reproducibilidad
+
+El entrenamiento usa `RANDOM_SEED` (definido en `config.py`). Las pruebas de la sección *Reproducibilidad del entrenamiento* entrenan el mismo modelo dos veces con la misma semilla y verifican que las predicciones sean exactamente iguales (`np.testing.assert_array_equal`).
+
+### Resultados esperados
+Resultado esperado: todas las pruebas en verde (PASSED) al final.
+
+#### test_features_p1.py - 13 pruebas aprobadas
+
+![Ejecución de PyTest](docs/images/test_features_p1.png)
+
+#### test_train_p1.py - 18 pruebas aprobadas
+
+![Ejecución de PyTest](docs/images/test_train_p1.png)
+
+
+#### test_model_p1.py - 17 pruebas aprobadas
+
+![Ejecución de PyTest](docs/images/test_model_p1.png)
+
+### test_predict_p1.py - 9 pruebas aprobadas
+
+![Ejecución de PyTest](docs/images/test_predict_p1.png)
+
+
+### Validación de datos (DeepChecks)
+
+_Pendiente: documentar aquí los chequeos de integridad y de drift entre train/test, y cómo ejecutarlos._
+
+### Chequeos de seguridad
+
+_Pendiente: documentar aquí el uso de `.gitignore`, variables de entorno y la salida de `bandit` / `pip-audit`._
+
+Auditoría de seguridad de código
+```bash
+bandit -r src/
+```
+
+![Auditoría con Bandit](docs/images/evidencia_bandit.png)
+
+Auditoría de dependencias
+```bash
+pip-audit
+```
+![Auditoría con Audit](docs/images/evidencia_audit.png)
+### Evidencia de ejecución
+
+_Pendiente: agregar capturas de `pytest -v` con todas las pruebas en verde (por ejemplo en `reports/figures/`)._
