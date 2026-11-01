@@ -5,11 +5,12 @@ Revisa la TABLA DE MODELADO (la salida de construir_dataset_p1), partida igual q
   train = antes de P1_VAL_INICIO   |   test = [P1_TEST_INICIO, P1_TEST_FIN)
 
 Uso (desde la raíz del repo):
-    python -m proyecto_mibici.tests.validar_datos_p1
-    python -m proyecto_mibici.tests.validar_datos_p1 --parquet ruta/a/p1_modelado.parquet
+    python tests/validar_datos_p1.py
+    python tests/validar_datos_p1.py --parquet data/interim/p1_modelado.parquet
 
-Genera reports/deepchecks/p1_data_integrity.html y p1_train_test_validation.html
-(los HTML pesan decenas de MB: no se suben al repo, solo las capturas).
+Genera en reports/deepchecks/: p1_data_integrity.html, p1_train_test_validation.html
+y p1_model_evaluation.html (este último solo si existe models/p1_champion.pkl).
+Los HTML pesan decenas de MB: no se suben al repo, solo las capturas.
 """
 import os
 import sys
@@ -21,7 +22,7 @@ import pandas as pd
 import numpy as np
 
 import joblib
-import pandas as pd
+
 from loguru import logger
 
 from proyecto_mibici.config import MODELS_DIR, P1_FEATURES_V2, P1_TARGET
@@ -50,9 +51,10 @@ if "max_error" not in sklearn.metrics._scorer._SCORERS:
     from sklearn.metrics import max_error, make_scorer
     sklearn.metrics._scorer._SCORERS["max_error"] = make_scorer(max_error, score_func_has_args=False)
 
-# Parche para np.Inf en NumPy 2.0 para DeepChecks
-if not hasattr(np, "Inf"):
-    np.Inf = np.inf
+# Parche para np.Inf y np.NaN, eliminados en NumPy 2.0, que DeepChecks todavía usa
+for _nombre, _valor in (("Inf", np.inf), ("NaN", np.nan)):
+    if not hasattr(np, _nombre):
+        setattr(np, _nombre, _valor)
 
 # Parche de compatibilidad para __sklearn_tags__ en Scikit-Learn >= 1.6 y DeepChecks
 import sklearn.base
@@ -206,14 +208,6 @@ def main(parquet: Optional[str] = None):
     # Imprimir resumen de cada suite
     for nombre_suite, res in resultados_dict.items():
         imprimir_resumen_suite(res, titulo=nombre_suite)
-        
-        # Imprimir no ejecutados específicos de esta suite
-        not_ran = res.get_not_ran_checks()
-        if not_ran:
-            print(f"\n--- CHEQUEOS NO EJECUTADOS EN [{nombre_suite.upper()}] ---")
-            for r in not_ran:
-                print(f"{r.get_header()} | {r.exception}")
-            print("---------------------------------------------------\n")
 
     print(f"\nReportes HTML guardados exitosamente en `{SALIDA}/`\n")
 
