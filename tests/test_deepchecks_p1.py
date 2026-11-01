@@ -9,8 +9,15 @@ Dos grupos:
 import os
 
 import numpy as np
-import pandas as pd
-import pytest
+
+# DeepChecks 0.19.1 todavía usa nombres que numpy 2 eliminó (np.Inf, np.NaN).
+# Se restauran como alias ANTES de importarlo; no cambia nada del proyecto.
+for _nombre, _valor in (("Inf", np.inf), ("NaN", np.nan)):
+    if not hasattr(np, _nombre):
+        setattr(np, _nombre, _valor)
+
+import pandas as pd  # noqa: E402
+import pytest  # noqa: E402
 
 try:
     from deepchecks.tabular.checks import DataDuplicates, FeatureDrift, IsSingleValue, LabelDrift  # type: ignore[reportMissingImports]

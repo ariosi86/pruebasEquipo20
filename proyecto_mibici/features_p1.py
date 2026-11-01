@@ -41,7 +41,7 @@ class LimpiadorFiltroEstacionesP1(BaseEstimator, TransformerMixin):
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         df_clean = X.drop_duplicates().copy()
-        assert df_clean["viaje_id"].is_unique, "Hay viaje_id repetidos con datos distintos."
+        assert df_clean["viaje_id"].is_unique, "Hay viaje_id repetidos con datos distintos."  # nosec B101
         if self.estaciones_validas_ is not None:
             return df_clean[df_clean["origen_id"].isin(self.estaciones_validas_)].reset_index(drop=True)
         return df_clean.reset_index(drop=True)

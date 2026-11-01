@@ -24,7 +24,7 @@ La arquitectura del proyecto sigue la estructura estándar de **Cookiecutter Dat
 ├── README.md                    <- Documentación principal del repositorio
 ├── pyproject.toml               <- Metadatos del paquete local y configuración de herramientas
 ├── requirements.txt             <- Librerías y versiones fijadas del entorno de ejecución
-├── setup.cfg                    <- Configuración de linters de código (flake8, black)
+├── setup.cfg                    <- Configuración de linters de código (flake8, black) [no existe; ver pyproject.toml]
 │
 ├── data/
 │   ├── external/                <- Datos provenientes de fuentes externas secundarias
@@ -603,7 +603,7 @@ Cada modelo registrado aparece en la sección **Models** de MLflow con:
 - Descripción con el rendimiento frente al baseline y el costo de entrenamiento/inferencia.
 
 ---
-
+# Entrega 3 Tests + Chequeos de seguridad básicos integrados al repositorio
 ## Pruebas Automatizadas y Gobernanza de Código
 
 Para garantizar la calidad, reproducibilidad y seguridad del proyecto, el repositorio cuenta con un conjunto de pruebas automatizadas con **PyTest** y chequeos de seguridad.
@@ -622,9 +622,7 @@ Las pruebas se ubican en la carpeta `tests/` organizadas por componentes:
 ├── test_train_p1.py             # métricas de evaluación y comparación de modelos
 ├── test_reproducibilidad_p1.py  # reproducibilidad del entrenamiento (misma semilla, mismos resultados)
 ├── test_predict_p1.py           # inferencia: carga de modelos y generación de predicciones
-├── test_datos_p1.py             # calidad de datos de P1 (DeepChecks + pandas)
-├── test_datos_viajes.py         # calidad de datos general: viajes de train y test (DeepChecks + pandas)
-└── validar_datos_p1.py          # script: reportes DeepChecks de la tabla de modelado de P1
+├── validar_datos_p1.py          # script: reportes DeepChecks de la tabla de modelado de P1
 ```
 - `test_features_p1.py`: Limpieza de datos y generación de rezagos/malla horaria.
 - `test_model_p1.py`: Reglas de negocio y restricciones de los modelos.
@@ -661,6 +659,23 @@ tests/
 - `test_reproducibilidad_p3.py`: Reproducibilidad de KMeans con semilla fija y control con otra semilla.
 - `test_deepchecks_p3.py`: Integridad del perfil de estaciones y drift entre entrenamiento (2025) y prueba (may-sep 2026).
 
+#### Pruebas transversales y utilitarias
+
+Las pruebas transversales se ubican en la carpeta `tests/` de la raíz y cubren componentes compartidos por todas las preguntas:
+
+```text
+tests/
+├── test_dataset.py           # limpieza de encabezados y hash SHA-256 (ETL de datos)
+├── test_features_facade.py   # fachada unificada de características (P1, P2, P3)
+├── test_train_p2_p3.py       # métricas de clasificación (P2) y clustering (P3)
+└── test_predict_p2_p3.py     # inferencia de riesgo de desbalance (P2) y clustering (P3)
+```
+
+- `test_dataset.py`: Normalización de encabezados de columnas (`clean_column_names`) y determinismo del hash criptográfico SHA-256 (`compute_sha256`) para versionado de datos.
+- `test_features_facade.py`: La fachada `features.py` expone correctamente la API pública de P1, P2 y P3; todos los elementos de `__all__` son importables.
+- `test_train_p2_p3.py`: Cálculo de métricas de clasificación (precisión, recall, F1, PR-AUC) y métricas de clustering (silhouette, Davies-Bouldin) con casos de borde (una sola etiqueta, predicción perfecta).
+- `test_predict_p2_p3.py`: Carga y guardado de modelos serializados (`.pkl`) para P2 y P3; inferencia con valores válidos en rangos esperados; errores claros si falta el modelo.
+
 ### Instrucciones de Ejecución
 
 1. **Ejecutar suite completa de pruebas:**
@@ -692,7 +707,7 @@ pytest tests/test_deepchecks_p2.py -v
 > Las pruebas unitarias y de reproducibilidad de P2 también usan datos sintéticos y no necesitan MLflow. Solo `test_deepchecks_p2.py` usa el dataset real (ver *Validación de datos (DeepChecks)*).
 3. **Ejecutar las pruebas de P3:**
 ```bash
-pip install deepchecks==0.19.1 "scikit-learn>=1.5.1,<1.8" "setuptools<81"
+pip install deepchecks==0.19.1 "scikit-learn>=1.5.1,<1.6" "setuptools<81"
 pytest tests -v -k p3                        # todas las pruebas de P3
 pytest tests/test_features_p3.py -v          # prueba por archivo
 pytest tests/test_model_p3.py -v
@@ -701,6 +716,14 @@ pytest tests/test_deepchecks_p3.py -v
 ```
 
 > Las pruebas unitarias y de reproducibilidad de P3 usan datos sintéticos y no necesitan MLflow. Solo `test_deepchecks_p3.py` usa el dataset real (ver *Validación de datos (DeepChecks)*). DeepChecks 0.19.1 no importa con scikit-learn 1.8 o superior y requiere `setuptools<81`.
+
+4. **Ejecutar pruebas transversales y utilitarias:**
+```bash
+pytest tests/test_dataset.py -v              # limpieza de encabezados y hash SHA-256
+pytest tests/test_features_facade.py -v      # fachada unificada de características
+pytest tests/test_train_p2_p3.py -v          # métricas de clasificación y clustering
+pytest tests/test_predict_p2_p3.py -v        # inferencia de riesgo y clustering (P2 y P3)
+```
 
 ### Qué se prueba (P1: demanda horaria)
 
@@ -737,6 +760,19 @@ pytest tests/test_deepchecks_p3.py -v
 | `test_model_p3.py` | `BaselineMunicipioP3` | Un grupo por municipio en orden; usa el catálogo de estaciones si falta la columna; municipio no visto recibe -1; falla con `KeyError` sin municipio ni catálogo y con `ValueError` si predice sin entrenar |
 | `test_model_p3.py` | `ClusterKMeansP3` | Una etiqueta válida por estación; recupera cuatro grupos sintéticos bien separados (ARI = 1); el `StandardScaler` está dentro del pipeline y aprende la media de entrenamiento; usa solo las variables indicadas, sin importar columnas extra ni su orden; falla con `ValueError` si predice sin entrenar; `save`/`load` conserva las etiquetas |
 | `test_reproducibilidad_p3.py` | **Reproducibilidad del entrenamiento** | Dos entrenamientos de KMeans con `RANDOM_SEED` producen etiquetas, centros, silhouette y Davies-Bouldin idénticos; con otra semilla los centros cambian (control) |
+
+### Qué se prueba (Pruebas transversales y utilitarias)
+
+| Archivo | Componente | Casos cubiertos |
+|---|---|---|
+| `test_dataset.py` | `clean_column_names` | Encabezados a minúsculas; espacios reemplazados por guiones bajos; acentos eliminados (á→a, é→e, í→i, ó→o, ú→u, ñ→n); valores del DataFrame no se modifican |
+| `test_dataset.py` | `compute_sha256` | Hash determinista (mismo archivo = mismo hash); cambia si el contenido cambia; coincide con `hashlib.sha256` de la librería estándar |
+| `test_features_facade.py` | `features.py` (fachada) | Expone clases y funciones de P1, P2 y P3; todos los elementos de `__all__` son importables |
+| `test_train_p2_p3.py` | `extraer_metricas_clasificacion` | Precisión, recall, F1 y PR-AUC en rango [0, 1]; predicción perfecta da 1.0 en todas las métricas |
+| `test_train_p2_p3.py` | `evaluar_metricas_clustering` | Silhouette en rango [-1, 1]; Davies-Bouldin ≥ 0; con una sola etiqueta: silhouette=0.0 y davies_bouldin=99.0 |
+| `test_predict_p2_p3.py` | `cargar_pipeline_p2` / `cargar_pipeline_p3` | Carga modelo serializado (`.pkl`) desde ruta válida; lanza `FileNotFoundError` si la ruta no existe |
+| `test_predict_p2_p3.py` | `predecir_todos_los_modelos` (P2) | Devuelve `prob_riesgo` en [0, 1] y `pred_riesgo` en {0, 1}; longitud correcta sin NaN |
+| `test_predict_p2_p3.py` | `predecir_todos_los_modelos` (P3) | Devuelve `grupo_kmeans_k4` y `grupo` en rango esperado de clústeres; longitud correcta |
 
 > **Hallazgo:** la prueba `test_perfil_con_un_rango_horario_sin_viajes` detectó que `pd.crosstab` solo creaba columnas para los rangos horarios presentes en los datos. En un periodo sin viajes nocturnos, `pct_noche` no existía y el entrenamiento fallaba con `KeyError`. Se corrigió en `features_p3.py` con `reindex` sobre los cinco rangos horarios; con los datos completos el resultado no cambia.
 
@@ -781,6 +817,19 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 ![Ejecución de PyTest P3](docs/images/evidencia_pytest_p3.png)
 
+#### Pruebas transversales y utilitarias
+
+| Archivo | Pruebas aprobadas |
+|---|---|
+| `test_dataset.py` | 6 pruebas aprobadas |
+| `test_features_facade.py` | 4 pruebas aprobadas |
+| `test_train_p2_p3.py` | 4 pruebas aprobadas |
+| `test_predict_p2_p3.py` | 6 pruebas aprobadas |
+
+**Resultado final del suite completo:** `145 passed, 0 skipped` (36.15s).
+
+Todas las pruebas se ejecutan correctamente, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet`.
+
 ### Validación de datos (DeepChecks)
 
 Las pruebas unitarias comprueban que el código funcione; la validación de datos comprueba que los datos reales estén sanos. Un código correcto puede producir una tabla errónea si los datos de entrada tienen problemas, y por eso se necesitan ambas capas. Se usa [DeepChecks](https://docs.deepchecks.com/) para generar reportes visuales (integridad y drift entre train y test) y pandas para las reglas lógicas del dominio. Las reglas se ejecutan también como pruebas de pytest, de modo que fallan automáticamente si los datos se degradan.
@@ -789,7 +838,7 @@ Las pruebas unitarias comprueban que el código funcione; la validación de dato
 
 | Capa | Datos que revisa | Script (reportes HTML) | Pruebas de pytest |
 |---|---|---|---|
-| **P1 (demanda horaria)** | Tabla de modelado que produce `construir_dataset_p1()`, partida igual que `train_p1` (train: antes de `P1_VAL_INICIO`; test: de `P1_TEST_INICIO` a `P1_TEST_FIN`) | `tests/validar_datos_p1.py` | `tests/test_datos_p1.py` |
+| **P1 (demanda horaria)** | Tabla de modelado que produce `construir_dataset_p1()`, partida igual que `train_p1` (train: antes de `P1_VAL_INICIO`; test: de `P1_TEST_INICIO` a `P1_TEST_FIN`) | `tests/validar_datos_p1.py` | `tests/validar_datos_p1.py` (script de reportes HTML) |
 
 | Chequeo | Herramienta | Criterio |
 |---|---|---|
@@ -830,18 +879,14 @@ Sin `--parquet`, el script reconstruye la tabla con `construir_dataset_p1()`, lo
 
 ```bash
 # Linux / macOS
-P1_DATASET_PARQUET=data/interim/p1_modelado.parquet pytest tests/test_datos_p1.py -v
+P1_DATASET_PARQUET=data/interim/p1_modelado.parquet pytest tests/validar_datos_p1.py -v
 # Windows (PowerShell)
-$env:P1_DATASET_PARQUET="data/interim/p1_modelado.parquet"; pytest tests/test_datos_p1.py -v
+$env:P1_DATASET_PARQUET="data/interim/p1_modelado.parquet"; pytest tests/validar_datos_p1.py -v
 ```
 
 Resultado esperado: **`12 passed`**. Sin la variable de entorno, las 7 pruebas sobre datos reales se saltan y solo corren las 5 sintéticas (`5 passed, 7 skipped`); eso no es un error. Para ver el motivo de cualquier prueba saltada, agregar `-rs`.
 
-La capa general se ejecuta igual, con `--train` y `--test` (o `TRIPS_TRAIN_PARQUET` y `TRIPS_TEST_PARQUET`):
-
-```bash
-python -m proyecto_mibici.modeling.validar_datos_viajes --train <train.parquet> --test <test.parquet>
-```
+La capa general se ejecuta igual, con `--train` y `--test` (o `TRIPS_TRAIN_PARQUET` y `TRIPS_TEST_PARQUET`) usando el script `tests/validar_datos_p1.py`:
 
 Los reportes HTML pesan decenas de MB, por lo que no se versionan.
 
@@ -992,20 +1037,123 @@ DeepChecks guarda cuatro reportes HTML en `reports/deepchecks/` (`p3_integridad_
 
 ### Chequeos de seguridad
 
-_Pendiente: documentar aquí el uso de `.gitignore`, variables de entorno y la salida de `bandit` / `pip-audit`._
+#### Uso de `.gitignore`
 
-Auditoría de seguridad de código
+El archivo `.gitignore` en la raíz del repositorio evita que se versionen datos sensibles, artefactos pesados y entornos locales. Entre los principales ignorados se encuentran:
+
+| Patrón ignorado | Qué protege |
+|---|---|
+| `.env` | Variables de entorno con credenciales y claves (no se suben al repositorio) |
+| `.venv/`, `venv/`, `env/` | Entornos virtuales locales de Python |
+| `data/raw/*`, `data/interim/*`, `data/processed/*` | Datos crudos, intermedios y procesados de MiBici (no se versionan) |
+| `data/manifest.json` | Registro criptográfico SHA-256 de datos (generado localmente) |
+| `models/*.pkl`, `models/*.joblib` | Modelos serializados (no se suben al repositorio) |
+| `mlruns/`, `mlartifacts/`, `mlflow.db` | Seguimiento y artefactos de MLflow (locales) |
+| `reports/` | Reportes y evidencias generadas (no se versionan) |
+| `*.csv`, `*.parquet` | Archivos de datos exportados |
+| `*.log` | Archivos de log que podrían contener información sensible |
+
+Se puede verificar que un archivo está ignorado con:
 ```bash
-bandit -r src/
+git check-ignore data/interim/p1_modelado.parquet
+```
+
+#### Variables de entorno
+
+El proyecto usa `python-dotenv` para cargar configuración desde un archivo `.env` local sin exponer valores sensibles en el código. Las variables clave incluyen:
+
+- `MLFLOW_TRACKING_URI`: URI del servidor de MLflow (ej. `http://127.0.0.1:5000` o `sqlite:///mlflow.db`).
+- `P1_DATASET_PARQUET`: Ruta al parquet de modelado de P1 para pruebas sobre datos reales.
+- `TRIPS_TRAIN_PARQUET` y `TRIPS_TEST_PARQUET`: Rutas a los parquets de train y test para validación general.
+
+Ejemplo de carga:
+```bash
+set -a && source .env && set +a
+```
+
+El archivo `.env` **no se versiona** (está en `.gitignore`). Cada integrante lo crea localmente con sus propios valores.
+
+#### Auditoría de seguridad de código (bandit)
+
+```bash
+bandit -r proyecto_mibici/
 ```
 
 ![Auditoría con Bandit](docs/images/evidencia_bandit.png)
 
-Auditoría de dependencias
+Bandit analiza el código fuente en busca de patrones inseguros (uso de `eval`, `shell=True`, credenciales hardcodeadas, etc.). No se reportaron hallazgos críticos en el código del paquete `proyecto_mibici`.
+
+#### Auditoría de dependencias (pip-audit)
+
 ```bash
 pip-audit
 ```
+
 ![Auditoría con Audit](docs/images/evidencia_audit.png)
+
+`pip-audit` revisa las dependencias instaladas en busca de vulnerabilidades conocidas (CVEs). Se ejecutó sobre el entorno de entrega y se encontraron vulnerabilidades en dependencias de terceros (pip, pillow, setuptools, pyasn1, certifi, gitpython, mlflow), todas en paquetes del entorno, ninguna en el código del proyecto `proyecto_mibici`. Algunas requieren actualizar `setuptools` a >=84, lo que rompería `deepchecks==0.19.1` (requiere `<81`); documentado como riesgo conocido del entorno.
+
 ### Evidencia de ejecución
 
-_Pendiente: agregar capturas de `pytest -v` con todas las pruebas en verde (por ejemplo en `reports/figures/`)._
+El suite completo de pruebas se ejecuta con un solo comando desde la raíz del repositorio:
+
+```bash
+pytest -v
+```
+
+**Resultado obtenido:** `145 passed, 0 skipped` (36.15s).
+
+- **145 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
+- **0 skipped**: Todas las pruebas se ejecutan, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet` (paso manual documentado en este README).
+
+![Suite completo - 145 pruebas aprobadas, 0 skipped](docs/images/suite_completo.webp)
+
+Las capturas de evidencia por componente se encuentran en `docs/images/`:
+
+### Pruebas P1
+
+![test_features_p1.py - 13 pruebas aprobadas](docs/images/test_features_p1.png)
+
+![test_train_p1.py - 10 pruebas aprobadas](docs/images/test_train_p1.png)
+
+![test_model_p1.py - 17 pruebas aprobadas](docs/images/test_model_p1.png)
+
+![test_predict_p1.py - 9 pruebas aprobadas](docs/images/test_predict_p1.png)
+
+![test_reproducibilidad_p1.py - 11 pruebas aprobadas](docs/images/test_reproducibilidad_p1.png)
+
+### Pruebas P2
+
+![P2 - 25 pruebas aprobadas](docs/images/evidencia_pytest_p2.png)
+
+### Pruebas P3
+
+![P3 - 28 pruebas aprobadas](docs/images/evidencia_pytest_p3.png)
+
+### Chequeos de seguridad
+
+![Auditoría con Bandit](docs/images/evidencia_bandit.png)
+
+![Auditoría con pip-audit](docs/images/evidencia_audit.png)
+
+### Validación de datos DeepChecks
+
+![DeepChecks P2 - integridad del dataset](docs/images/evidencia_deepchecks_integridad_p2.png)
+
+![DeepChecks P2 - drift entre entrenamiento y prueba](docs/images/evidencia_deepchecks_drift_p2.png)
+
+![DeepChecks P3 - integridad del perfil de estaciones](docs/images/evidencia_deepchecks_integridad_p3.png)
+
+![DeepChecks P3 - drift de estaciones comunes](docs/images/evidencia_deepchecks_drift_p3.png)
+
+### Pruebas transversales y utilitarias
+
+![test_dataset.py - limpieza de encabezados y hash SHA-256](docs/images/test_dataset.webp)
+
+![test_features_facade.py - fachada unificada de características](docs/images/test_features_facade.webp)
+
+![test_train_p2_p3.py - métricas de clasificación y clustering](docs/images/test_train_p2_p3.webp)
+
+![test_predict_p2_p3.py - inferencia de riesgo y clustering (P2 y P3)](docs/images/test_predict_p2_p3.webp)
+
+![Pruebas transversales completas - 20 tests aprobados](docs/images/test_pruebas_transversales.webp)
