@@ -9,33 +9,36 @@ Dos grupos:
 import os
 
 import numpy as np
-
-# DeepChecks 0.19.1 todavía usa nombres que numpy 2 eliminó (np.Inf, np.NaN).
-# Se restauran como alias ANTES de importarlo; no cambia nada del proyecto.
-for _nombre, _valor in (("Inf", np.inf), ("NaN", np.nan)):
-    if not hasattr(np, _nombre):
-        setattr(np, _nombre, _valor)
-
-import pandas as pd  # noqa: E402
-import pytest  # noqa: E402
+import pandas as pd
+import pytest
 
 try:
-    from deepchecks.tabular.checks import DataDuplicates, FeatureDrift, IsSingleValue, LabelDrift  # type: ignore[reportMissingImports]
-except Exception as e:  # no instalado o incompatible con las versiones de sklearn/pandas del entorno
+    # IMPORTANTE: primero el módulo del script. Al importarse aplica los parches de compatibilidad
+    # (NumPy 2, scikit-learn >= 1.6, Python 3.14) que DeepChecks necesita para poder importarse.
+    from validar_datos_p1 import (
+        COL_ESTACION,
+        armar_dataset,
+        cargar_df_p1,
+        columna_tiempo,
+        dividir_train_test,
+    )
+    from deepchecks.tabular.checks import (
+        DataDuplicates,
+        DateTrainTestLeakageOverlap,
+        FeatureDrift,
+        FeatureLabelCorrelation,
+        IsSingleValue,
+        LabelDrift,
+    )
+except Exception as e:  # no instalado o incompatible con las versiones del entorno
     pytest.skip(f"DeepChecks no disponible en este entorno: {e}", allow_module_level=True)
 
-from proyecto_mibici.config import P1_FEATURES_V2, P1_TARGET
-from tests.validar_datos_p1 import (  
-    COL_ESTACION,
-    armar_dataset,
-    cargar_df_p1,
-    columna_tiempo,
-    dividir_train_test,
-)
+from proyecto_mibici.config import P1_DATASET_PARQUET, P1_FEATURES_V2, P1_TARGET
 
-
+# Umbrales: son decisiones nuestras, ajustarlas con los datos reales y justificarlas en el README.
 MAX_DRIFT_FEATURES = 0.2
 MAX_DRIFT_TARGET = 0.2
+MAX_PPS = 0.8   # poder predictivo máximo de una sola feature sobre el target (valor por defecto de DeepChecks)
 FEATURES_DRIFT = ["lag_1h", "lag_24h", "lag_168h", "rolling_3h", "rolling_168h"]
 
 
@@ -43,9 +46,9 @@ FEATURES_DRIFT = ["lag_1h", "lag_24h", "lag_168h", "rolling_3h", "rolling_168h"]
 
 @pytest.fixture(scope="module")
 def df_real():
-    if not os.environ.get("P1_DATASET_PARQUET"):
-        pytest.skip("Define P1_DATASET_PARQUET con la ruta del parquet de la tabla de modelado de P1.")
-    return cargar_df_p1()
+    if not P1_DATASET_PARQUET.exists():
+        pytest.skip(f"No existe el parquet de modelado: {P1_DATASET_PARQUET}")
+    return cargar_df_p1(ruta_parquet=str(P1_DATASET_PARQUET))
 
 
 @pytest.fixture(scope="module")
@@ -103,6 +106,21 @@ def test_real_drift_del_target_entre_train_y_test(splits_reales):
     assert r.passed_conditions()
 
 
+def test_real_sin_fuga_temporal_entre_train_y_test(splits_reales):
+    """Ninguna fecha de test debe caer dentro del periodo de train."""
+    train, test = splits_reales
+    r = DateTrainTestLeakageOverlap().add_condition_leakage_ratio_less_or_equal(0).run(
+        armar_dataset(train), armar_dataset(test))
+    assert r.passed_conditions()
+
+
+def test_real_ninguna_feature_predice_el_target_por_si_sola(df_real):
+    """PPS (poder predictivo): una feature que casi predice sola el target sugiere fuga de información."""
+    ds = armar_dataset(df_real.dropna(subset=[P1_TARGET]))
+    r = FeatureLabelCorrelation(random_state=42).add_condition_feature_pps_less_than(MAX_PPS).run(ds)
+    assert r.passed_conditions()
+
+
 # ======================= B) SINTÉTICOS: ¿los chequeos detectan fallas? =======================
 
 def _sintetico(semilla=0, desplazamiento=0.0, estaciones=10, horas=100):
@@ -155,3 +173,35 @@ def test_sintetico_detecta_drift_inyectado():
         max_allowed_numeric_score=MAX_DRIFT_FEATURES).run(
         armar_dataset(_sintetico(semilla=1)), armar_dataset(_sintetico(semilla=2, desplazamiento=3.0)))
     assert not r.passed_conditions()
+
+
+def _fuga_temporal_pasa(train, test):
+    r = DateTrainTestLeakageOverlap().add_condition_leakage_ratio_less_or_equal(0).run(
+        armar_dataset(train), armar_dataset(test))
+    return r.passed_conditions()
+
+
+def test_sintetico_sin_fuga_temporal_si_test_es_posterior():
+    train = _sintetico(semilla=1)
+    test = _sintetico(semilla=2).assign(hour_window=lambda d: d["hour_window"] + pd.Timedelta(hours=1000))
+    assert _fuga_temporal_pasa(train, test)
+
+
+def test_sintetico_detecta_fuga_temporal_inyectada():
+    """Train y test con las mismas fechas: el test queda dentro del periodo de train."""
+    assert not _fuga_temporal_pasa(_sintetico(semilla=1), _sintetico(semilla=2))
+
+
+def _pps_pasa(df):
+    r = FeatureLabelCorrelation(random_state=42).add_condition_feature_pps_less_than(MAX_PPS).run(armar_dataset(df))
+    return r.passed_conditions()
+
+
+def test_sintetico_sin_feature_que_prediga_el_target_en_datos_sanos():
+    assert _pps_pasa(_sintetico())
+
+
+def test_sintetico_detecta_feature_que_es_copia_del_target():
+    df = _sintetico()
+    df["lag_1h"] = df[P1_TARGET]          # fuga de información inyectada
+    assert not _pps_pasa(df)
