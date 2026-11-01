@@ -622,7 +622,8 @@ Las pruebas se ubican en la carpeta `tests/` organizadas por componentes:
 ├── test_train_p1.py             # métricas de evaluación y comparación de modelos
 ├── test_reproducibilidad_p1.py  # reproducibilidad del entrenamiento (misma semilla, mismos resultados)
 ├── test_predict_p1.py           # inferencia: carga de modelos y generación de predicciones
-├── validar_datos_p1.py          # script: reportes DeepChecks de la tabla de modelado de P1
+├── test_deepchecks_p1.py        # calidad de datos de P1 (DeepChecks + pandas)
+└── validar_datos_p1.py          # script: reportes DeepChecks de la tabla de modelado de P1
 ```
 - `test_features_p1.py`: Limpieza de datos y generación de rezagos/malla horaria.
 - `test_model_p1.py`: Reglas de negocio y restricciones de los modelos.
@@ -675,6 +676,8 @@ tests/
 - `test_features_facade.py`: La fachada `features.py` expone correctamente la API pública de P1, P2 y P3; todos los elementos de `__all__` son importables.
 - `test_train_p2_p3.py`: Cálculo de métricas de clasificación (precisión, recall, F1, PR-AUC) y métricas de clustering (silhouette, Davies-Bouldin) con casos de borde (una sola etiqueta, predicción perfecta).
 - `test_predict_p2_p3.py`: Carga y guardado de modelos serializados (`.pkl`) para P2 y P3; inferencia con valores válidos en rangos esperados; errores claros si falta el modelo.
+- `test_deepchecks_p1.py`: Validación automática de la tabla de modelado de P1 sobre los datos reales (llave estación + hora única, sin nulos, rangos válidos, sin fuga temporal, drift entre train y test), con resultado `PASSED` o `FAILED`; incluye pruebas con datos sintéticos que comprueban que los chequeos detectan fallas.
+- `validar_datos_p1.py`: Script (no es una prueba) que ejecuta las suites completas de DeepChecks y genera los reportes HTML de integridad, train/test y evaluación del modelo, que se usan como evidencia visual.
 
 ### Instrucciones de Ejecución
 
@@ -838,7 +841,8 @@ Las pruebas unitarias comprueban que el código funcione; la validación de dato
 
 | Capa | Datos que revisa | Script (reportes HTML) | Pruebas de pytest |
 |---|---|---|---|
-| **P1 (demanda horaria)** | Tabla de modelado que produce `construir_dataset_p1()`, partida igual que `train_p1` (train: antes de `P1_VAL_INICIO`; test: de `P1_TEST_INICIO` a `P1_TEST_FIN`) | `tests/validar_datos_p1.py` | `tests/validar_datos_p1.py` (script de reportes HTML) |
+| **P1 (demanda horaria)** | Tabla de modelado que produce `construir_dataset_p1()`, partida igual que `train_p1` (train: antes de `P1_VAL_INICIO`; test: de `P1_TEST_INICIO` a `P1_TEST_FIN`) | `tests/validar_datos_p1.py` | `tests/test_deepchecks_p1.py` |
+
 
 | Chequeo | Herramienta | Criterio |
 |---|---|---|
@@ -853,6 +857,18 @@ Las pruebas unitarias comprueban que el código funcione; la validación de dato
 | Evaluación del modelo champion | Suite `model_evaluation` (carga `models/p1_champion.pkl`) | reporte HTML para revisión manual; ver *Resultados* |
 
 > La unicidad de duplicados se mide por la llave (estación + hora) y no sobre las features. En horas de poca demanda muchas filas tienen los mismos rezagos de forma legítima, por lo que una revisión solo sobre las features marcaría casi toda la tabla como duplicada (en una prueba con datos sintéticos, 96.7 %, sin ninguna fila realmente repetida).
+
+#### Diferencia entre el script y las pruebas
+
+El script y el archivo de pruebas se complementan: no ejecutan lo mismo.
+
+| | `validar_datos_p1.py` (script) | `tests/test_deepchecks_p1.py` (pytest) |
+|---|---|---|
+| Para qué sirve | Generar reportes para revisarlos a mano | Validar reglas de forma automática |
+| Qué ejecuta | Las suites completas de DeepChecks (`data_integrity`, `train_test_validation` y `model_evaluation`) | Chequeos puntuales con un umbral (llave única, nulos, rangos, fuga temporal, drift, PPS) |
+| Salida | Reportes HTML y un resumen en consola | `PASSED` o `FAILED` por cada regla |
+| Se ejecuta con | `python -m ...` | `pytest` |
+| Evalúa el modelo | Sí (suite `model_evaluation`) | No |
 
 #### Cómo ejecutar
 
@@ -870,7 +886,7 @@ df_p1.to_parquet("data/interim/p1_modelado.parquet", index=False)
 **2. Generar los reportes.** El script ejecuta las suites de integridad y de train/test, y la de evaluación del modelo si existe `models/p1_champion.pkl`. Guarda `p1_data_integrity.html`, `p1_train_test_validation.html` y `p1_model_evaluation.html` en `reports/deepchecks/`, e imprime en consola un resumen con los chequeos que fallaron o no corrieron (y su motivo):
 
 ```bash
-python -m tests.validar_datos_p1 --parquet data/interim/p1_modelado.parquet
+python -m tests.validar_datos_p1 --parquet data/interim/p1_modelado.parquet # genera los 3 reportes HTML en reports/deepchecks/
 ```
 
 Sin `--parquet`, el script reconstruye la tabla con `construir_dataset_p1()`, lo cual tarda bastante más.
@@ -879,12 +895,12 @@ Sin `--parquet`, el script reconstruye la tabla con `construir_dataset_p1()`, lo
 
 ```bash
 # Linux / macOS
-P1_DATASET_PARQUET=data/interim/p1_modelado.parquet pytest tests/validar_datos_p1.py -v
+P1_DATASET_PARQUET=data/interim/p1_modelado.parquet pytest tests/test_deepchecks_p1.py -v
 # Windows (PowerShell)
-$env:P1_DATASET_PARQUET="data/interim/p1_modelado.parquet"; pytest tests/validar_datos_p1.py -v
+$env:P1_DATASET_PARQUET="data/interim/p1_modelado.parquet"; pytest tests/test_deepchecks_p1.py -v
 ```
 
-Resultado esperado: **`12 passed`**. Sin la variable de entorno, las 7 pruebas sobre datos reales se saltan y solo corren las 5 sintéticas (`5 passed, 7 skipped`); eso no es un error. Para ver el motivo de cualquier prueba saltada, agregar `-rs`.
+Resultado esperado: 18 passed(9 sobre datos reales y 9 sintéticas). Pueden aparecer avisos de scikit-learn y NumPy; son de DeepChecks y no afectan el resultado. Sin la variable de entorno, las pruebas sobre datos reales se saltan y solo corren las sintéticas; eso no es un error. Para ver el motivo de cualquier prueba saltada, agregar `-rs`.
 
 La capa general se ejecuta igual, con `--train` y `--test` (o `TRIPS_TRAIN_PARQUET` y `TRIPS_TEST_PARQUET`) usando el script `tests/validar_datos_p1.py`:
 
@@ -892,18 +908,19 @@ Los reportes HTML pesan decenas de MB, por lo que no se versionan.
 
 #### Pruebas que validan los propios chequeos
 
-Además de las pruebas sobre los datos reales, `test_datos_p1.py` incluye pruebas con datos sintéticos a los que se les inyectan problemas a propósito (duplicados, drift), para demostrar que los chequeos sí detectan las fallas y no pasan por casualidad.
+Además de las pruebas sobre los datos reales, `test_deepchecks_p1.py` incluye pruebas con datos sintéticos a los que se les inyectan problemas a propósito (duplicados, drift, fuga temporal y una feature que es copia del target), para demostrar que los chequeos sí detectan las fallas y no pasan por casualidad.
 
 #### Umbrales de drift y justificación
 
-DeepChecks mide el drift con un puntaje de 0 (distribuciones idénticas) a 1 (completamente distintas). Para variables numéricas el método es Kolmogorov-Smirnov y para el target, V de Cramér. Los umbrales se definen al inicio de `tests/test_datos_p1.py`:
+DeepChecks mide el drift con un puntaje de 0 (distribuciones idénticas) a 1 (completamente distintas). Para variables numéricas el método es Kolmogorov-Smirnov y para el target, V de Cramér. Los umbrales se definen al inicio de `tests/test_deepchecks_p1.py`:
 
 | Parámetro | Valor | Justificación |
 |---|---|---|
 | `MAX_DRIFT_FEATURES` | 0.2 | Valor por defecto de DeepChecks. La propia librería indica que solo existe un estándar de industria para PSI (0.2) y que no hay uno común para KS ni V de Cramér, por lo que el valor se contrasta con la variación natural de nuestros datos. |
 | `MAX_DRIFT_TARGET` | 0.2 | Ídem. |
+| `MAX_PPS` | 0.8 | Valor por defecto de DeepChecks para detectar fuga de información: una sola variable que casi predice el objetivo. En la suite de integridad con los datos reales, ese chequeo no reportó fallos. |
 
-**Train/test.** `Feature Drift` y `Label Drift` pasaron. El único fallo es `Train Test Samples Mix`: el **51.27 %** de las filas de test aparece idéntico en train (umbral por defecto: 5 %). No se considera fuga de datos, porque las features son rezagos del pasado. Se explica por la naturaleza de la demanda: en test, el **55.96 %** de las horas tiene demanda 0 y el **35.56 %** tiene los tres rezagos (`lag_1h`, `lag_24h`, `lag_168h`) en 0. Además, con features de pocos valores posibles, los patrones de baja demanda se repiten de forma natural. Los ceros por sí solos no explican todo el 51 %; el resto corresponde a esos patrones repetidos. El umbral no se modificó, y la alerta se documenta como un hallazgo.
+Con los datos reales, `Feature Drift` y `Label Drift` pasaron con el umbral de 0.2, es decir, no se detectó drift relevante entre train y test, por lo que el umbral por defecto se conservó. No se midió la variación natural entre dos mitades del propio train; si en el futuro algún puntaje se acerca al umbral, esa medición es la forma de decidir si conviene ajustarlo. Si el drift superara el umbral, la decisión es documentar la causa probable (por ejemplo, estacionalidad por meses distintos entre train y test) y ajustar el umbral con justificación o aceptar el hallazgo con `xfail` y su motivo, nunca subirlo solo para que la prueba pase.
 
 #### Resultados
 
@@ -933,7 +950,7 @@ La brecha entre train y test es pequeña (el RMSE sube cerca de 2 % y el R² baj
 
 #### Chequeos que no corrieron
 
-De los 18 chequeos que no corrieron, **9 no aplican** y **9 se deben a incompatibilidades de DeepChecks 0.19.1 con las versiones del entorno**. Ninguno se debe a los datos ni al modelo.
+De los 18 chequeos que no corrieron, 9 no aplican y 9 se deben a incompatibilidades de DeepChecks 0.19.1 con las versiones del entorno**. Ninguno se debe a los datos ni al modelo.
 
 | Motivo | Chequeos |
 |---|---|
@@ -945,6 +962,9 @@ De los 18 chequeos que no corrieron, **9 no aplican** y **9 se deben a incompati
 Los análisis que esos chequeos habrían aportado se cubren con otras herramientas del proyecto: la comparación contra los baselines ingenuos y las métricas por estación registradas en MLflow, y la distribución de errores se puede calcular directamente a partir de las predicciones.
 
 ##### Evidencias
+Pytest test_deepchecks_p1
+![Deepcheck P1)](docs/images/test_deepchecks_p1.png)
+
 Reporte de integridad (P1) 
 
 ![Reporte de integridad (P1)](docs/images/deepchecks_p1_integridad.png)
@@ -975,12 +995,11 @@ Reporte evaluación del modelo (P1)
 
 #### Compatibilidad y limitaciones
 
-- `validar_datos_p1.py` aplica al importarse unos parches de compatibilidad (simula `pkg_resources` en Python 3.14, registra el scorer `max_error`, define `np.Inf` y `__sklearn_tags__`) que DeepChecks necesita para poder importarse. Por eso `tests/test_datos_p1.py` importa primero ese módulo y después DeepChecks; con el orden inverso, la prueba completa se saltaría sin avisar.
+- `validar_datos_p1.py` aplica al importarse unos parches de compatibilidad (simula `pkg_resources` en Python 3.14, registra el scorer `max_error`, define `np.Inf` y `__sklearn_tags__`) que DeepChecks necesita para poder importarse. Por eso `tests/test_deepchecks_p1.py` importa primero ese módulo y después DeepChecks; con el orden inverso, la prueba completa se saltaría sin avisar.
 - DeepChecks 0.19.1 es anterior a NumPy 2 y a scikit-learn 1.6. En el entorno del proyecto (Python 3.14, NumPy 2 y scikit-learn 1.6 o posterior) funciona, pero 9 de sus chequeos no se ejecutan (ver *Chequeos que no corrieron*). 
 - Con versiones antiguas (por ejemplo `numpy<2`, `scikit-learn<1.6`, `pandas<2.3`, `setuptools<81`) se verificó en un entorno aparte que los chequeos de datos que dependen de NumPy sí corren; ese entorno no es necesario para esta entrega.
 - DeepChecks no se puede importar con scikit-learn 1.9 ni pandas 3.0. Si no se puede importar en el entorno, las pruebas de este módulo se saltan con un mensaje en lugar de romper el resto de la suite.
-- DeepChecks corre sobre una muestra (en la capa general, 200 000 filas); las reglas de pandas revisan todos los datos.
-- Los umbrales son decisiones del equipo. Los chequeos de P1 validan solo la tabla de P1; las demás preguntas requieren su propio chequeo.
+- DeepChecks corre sobre una muestra; las reglas de pandas revisan todos los datos.
 
 #### P2
 
