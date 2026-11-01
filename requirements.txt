@@ -27,6 +27,9 @@ seaborn>=0.13.2
 pytest>=7.4.0
 bandit>=1.9.4
 pip-audit>=2.10.1
+deepchecks>=0.19.1
+setuptools>=84.2.1
+packaging>=26.3
 
 # Notebooks y exploración
 ipykernel>=6.29.0

@@ -1,10 +1,7 @@
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import pytest
 
-from proyecto_mibici.config import RANDOM_SEED
-from proyecto_mibici.modeling.model_p1 import DemandaLinealP1, DemandaPoissonP1
 from proyecto_mibici.modeling.train_p1 import (
     calcular_metricas_por_estacion,
     evaluar_metricas_regresion,
@@ -83,54 +80,3 @@ def test_registrar_fila_comparacion_agrega_una_fila():
     registrar_fila_comparacion(filas, "baseline", m, m, m)
     assert len(filas) == 1 and filas[0]["modelo"] == "baseline"
     assert filas[0]["test_rmse"] == 2.0
-
-
-# ---------- REPRODUCIBILIDAD DEL ENTRENAMIENTO ----------
- 
-# Mismos objetivos que usa train_p1 (poisson y tweedie, este último es el champion).
-# Se reducen n_estimators y num_leaves para que la prueba corra en segundos.
-OBJETIVOS_LGBM = [
-    pytest.param({"objective": "poisson"}, id="poisson"),
-    pytest.param({"objective": "tweedie", "tweedie_variance_power": 1.8}, id="tweedie"),
-]
- 
- 
-def _lgbm(semilla, **objetivo):
-    return lgb.LGBMRegressor(learning_rate=0.1, num_leaves=15, n_estimators=50,
-                             random_state=semilla, verbose=-1, **objetivo)
- 
- 
-@pytest.mark.parametrize("objetivo", OBJETIVOS_LGBM)
-def test_lightgbm_misma_semilla_mismas_predicciones(objetivo, datos_modelado):
-    X, y = datos_modelado
-    p1 = np.clip(_lgbm(RANDOM_SEED, **objetivo).fit(X, y).predict(X), 0, None)
-    p2 = np.clip(_lgbm(RANDOM_SEED, **objetivo).fit(X, y).predict(X), 0, None)
-    np.testing.assert_array_equal(p1, p2)
- 
- 
-@pytest.mark.parametrize("objetivo", OBJETIVOS_LGBM)
-def test_lightgbm_con_submuestreo_misma_semilla_mismo_resultado(objetivo, datos_modelado):
-    """Con bagging activo la semilla SÍ importa: misma semilla = igual, otra semilla = distinto."""
-    X, y = datos_modelado
-    def entrenar(semilla):
-        return lgb.LGBMRegressor(n_estimators=50, subsample=0.7, subsample_freq=1,
-                                 random_state=semilla, verbose=-1, **objetivo).fit(X, y).predict(X)
-    np.testing.assert_array_equal(entrenar(1), entrenar(1))
-    assert not np.array_equal(entrenar(1), entrenar(2))
- 
- 
-@pytest.mark.parametrize("Modelo", [DemandaLinealP1, DemandaPoissonP1])
-def test_modelos_sklearn_entrenamiento_reproducible(Modelo, datos_modelado):
-    X, y = datos_modelado
-    p1 = Modelo(features=list(X.columns)).fit(X, y).predict(X)
-    p2 = Modelo(features=list(X.columns)).fit(X, y).predict(X)
-    np.testing.assert_array_equal(p1, p2)
- 
- 
-@pytest.mark.parametrize("objetivo", OBJETIVOS_LGBM)
-def test_metricas_reproducibles_entre_dos_entrenamientos(objetivo, datos_modelado):
-    X, y = datos_modelado
-    m1 = evaluar_metricas_regresion(y, _lgbm(RANDOM_SEED, **objetivo).fit(X, y).predict(X), "Train")
-    m2 = evaluar_metricas_regresion(y, _lgbm(RANDOM_SEED, **objetivo).fit(X, y).predict(X), "Train")
-    assert m1 == m2
- 

@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 Ingeniería de características para P1: Demanda Horaria (Regresión).
 """

@@ -615,17 +615,22 @@ Para garantizar la calidad, reproducibilidad y seguridad del proyecto, el reposi
 
 Las pruebas se ubican en la carpeta `tests/` organizadas por componentes:
 ```text
-tests/
+/tests/
 ├── conftest.py            # datos sintéticos reutilizables (fixtures)
 ├── test_features_p1.py    # ingeniería de características de P1
 ├── test_model_p1.py       # modelos de P1 (baseline, lineal, Poisson)
-├── test_train_p1.py       # métricas de evaluación y reproducibilidad del entrenamiento
-└── test_predict_p1.py     # inferencia: carga de modelos y generación de predicciones
+├── test_train_p1.py             # métricas de evaluación y comparación de modelos
+├── test_reproducibilidad_p1.py  # reproducibilidad del entrenamiento (misma semilla, mismos resultados)
+├── test_predict_p1.py           # inferencia: carga de modelos y generación de predicciones
+├── test_datos_p1.py             # calidad de datos de P1 (DeepChecks + pandas)
+├── test_datos_viajes.py         # calidad de datos general: viajes de train y test (DeepChecks + pandas)
+└── validar_datos_p1.py          # script: reportes DeepChecks de la tabla de modelado de P1
 ```
 - `test_features_p1.py`: Limpieza de datos y generación de rezagos/malla horaria.
 - `test_model_p1.py`: Reglas de negocio y restricciones de los modelos.
 - `test_predict_p1.py`: Pipeline de inferencia y generación de reportes.
-- `test_train_p1.py`: Pruebas de reproducibilidad con semillas fijas y métricas.
+- `test_train_p1.py`: Métricas de evaluación (MAE, RMSE, WAPE y sesgo), métricas por estación y tabla comparativa de modelos.
+- `test_reproducibilidad_p1.py`: Reproducibilidad del entrenamiento con semilla fija y control con otra semilla.
 
 #### P2
 
@@ -662,14 +667,17 @@ tests/
 ```bash
 pip install pytest          # (o: pip install -r requirements.txt)
 pytest -v                   # todas las pruebas, con detalle
-pytest proyecto_mibici/tests/test_features_p1.py -v #prueba por archivo
-pytest proyecto_mibici/tests/test_model_p1.py -v
-pytest proyecto_mibici/tests/test_predict_p1.py -v
-pytest proyecto_mibici/tests/test_train_p1.py -v
-pytest -k "reproducible"                  # solo pruebas cuyo nombre contenga la palabra
 ```
 
-> Las pruebas **no usan el dataset real de MiBici**. Usan DataFrames pequeños y sintéticos definidos en `tests/conftest.py`, por lo que corren en pocos segundos y no dependen de archivos externos ni de MLflow.
+2. **Ejecutar las pruebas de P1:**
+```bash
+pytest tests/test_features_p1.py -v #prueba por archivo
+pytest tests/test_model_p1.py -v
+pytest tests/test_predict_p1.py -v
+pytest tests/test_train_p1.py -v
+pytest tests/test_reproducibilidad_p1.py -v
+```
+> Las pruebas **unitarias** no usan el dataset real de MiBici. Usan DataFrames pequeños y sintéticos definidos en `tests/conftest.py`, por lo que corren en pocos segundos y no dependen de archivos externos ni de MLflow. La validación sobre los **datos reales** está en la sección *Validación de datos (DeepChecks)*.
 
 2. **Ejecutar las pruebas de P2:**
 ```bash
@@ -704,7 +712,7 @@ pytest tests/test_deepchecks_p3.py -v
 | `test_model_p1.py` | `DemandaLinealP1` y `DemandaPoissonP1` | `fit`/`predict` con forma correcta y sin negativos; el pipeline expone el `scaler`; usa solo las `features` indicadas; falla si faltan columnas; `save`/`load` conserva las predicciones; la regresión lineal recupera una relación exacta |
 | `test_train_p1.py` | `evaluar_metricas_regresion` | MAE, RMSE, WAPE y sesgo verificados contra valores calculados a mano; caso con reales en cero |
 | `test_train_p1.py` | `calcular_metricas_por_estacion` y `registrar_fila_comparacion` | Una fila por estación; error absoluto total; unión con el catálogo de nombres; no modifica la entrada |
-| `test_train_p1.py` | **Reproducibilidad del entrenamiento** | 	Con la misma semilla, LightGBM (objetivos Poisson y Tweedie), regresión lineal y Poisson producen predicciones idénticas; con submuestreo activo, otra semilla produce resultados distintos; las métricas de dos entrenamientos coinciden |
+| `test_reproducibilidad_p1.py` | **Reproducibilidad del entrenamiento** | Con la misma semilla, LightGBM (objetivos Poisson y Tweedie), regresión lineal y regresión de Poisson producen predicciones idénticas; con submuestreo activo, la misma semilla da el mismo resultado; las métricas de dos entrenamientos coinciden; el champion guardado (`p1_champion.pkl`), reentrenado con sus mismos hiperparámetros, es reproducible; con otra semilla el resultado cambia (control) |
 | `test_predict_p1.py` | `predecir_todos_los_modelos`, `generar_reporte_inferencia`, `cargar_modelo` | Columnas esperadas (4 baselines, v1, v2 y alias `demanda_predicha`); longitud correcta, sin NaN ni negativos; el alias coincide con v2; un modelo guardado y cargado predice igual que el original; fallback a `p1_linear_model.pkl`; error claro si falta el modelo o faltan columnas; no modifica la entrada; resultado determinista |
 
 > Las pruebas de inferencia guardan los modelos en una carpeta temporal (`tmp_path`), por lo que no tocan el directorio `models/` real.
@@ -734,9 +742,10 @@ pytest tests/test_deepchecks_p3.py -v
 
 ### Reproducibilidad
 
-El entrenamiento usa `RANDOM_SEED` (definido en `config.py`). Las pruebas de la sección *Reproducibilidad del entrenamiento* entrenan el mismo modelo dos veces con la misma semilla y verifican que las predicciones sean exactamente iguales (`np.testing.assert_array_equal`).
+En P1, `test_reproducibilidad_p1.py` entrena cada modelo dos veces con `RANDOM_SEED` (definido en `config.py`) y verifica que las predicciones y las métricas sean exactamente iguales (`np.testing.assert_array_equal`). La regresión lineal y la de Poisson no tienen azar, y LightGBM solo lo tiene si se activa el submuestreo de filas o de columnas, que no usan los candidatos `lgbm_poisson` y `lgbm_tweedie` de `train_p1`; por eso la prueba de LightGBM se repite también con submuestreo activo (`subsample=0.7`), que es el caso en que la semilla decide el resultado. Como control, verifica que con otra semilla el resultado cambie; si no cambiara, las pruebas de igualdad pasarían aunque el modelo ignorara la semilla. Se prueban los objetivos Poisson y Tweedie y, además, una prueba toma los hiperparámetros del champion guardado en `models/p1_champion.pkl` (los que resultaron de la búsqueda anidada), entrena ese mismo modelo dos veces con `RANDOM_SEED` y compara predicciones y métricas; si el archivo no existe (por ejemplo, en un clon recién hecho), esa prueba se omite. Las pruebas usan datos sintéticos para correr en segundos, por lo que no entrenan con los datos de MiBici. Según la documentación de LightGBM, cambiar el número de hilos puede alterar mínimamente el resultado salvo que se active `deterministic=True`; las pruebas comparan dos corridas con la misma configuración.
 
 En P2, el azar del GBM viene de `early_stopping`, que aparta al azar un 10 % de los datos para decidir cuándo detener el entrenamiento; la semilla fija ese sorteo. `test_reproducibilidad_p2.py` entrena el GBM dos veces con `RANDOM_SEED` y verifica que predicciones, probabilidades y métricas sean idénticas. Como control, verifica que con otra semilla el resultado cambie; si no cambiara, la prueba anterior pasaría aunque el modelo ignorara la semilla.
+
 En P3, el azar de KMeans está en la posición inicial de los centros. `test_reproducibilidad_p3.py` usa perfiles sintéticos sin grupos marcados y un solo arranque (`n_init=1`), que es el caso en que la semilla decide el resultado. Con `RANDOM_SEED` dos entrenamientos dan etiquetas, centros y métricas idénticos; con otra semilla los centros cambian, lo que confirma que la igualdad se debe a la semilla.
 
 ### Resultados esperados
@@ -746,7 +755,7 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 ![Ejecución de PyTest](docs/images/test_features_p1.png)
 
-#### test_train_p1.py - 18 pruebas aprobadas
+#### test_train_p1.py - 10 pruebas aprobadas
 
 ![Ejecución de PyTest](docs/images/test_train_p1.png)
 
@@ -759,6 +768,10 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 ![Ejecución de PyTest](docs/images/test_predict_p1.png)
 
+### test_reproducibilidad_p1.py - 11 pruebas aprobadas
+
+![Ejecución de PyTest](docs/images/test_reproducibilidad_p1.png)
+
 #### P2 - 25 pruebas aprobadas
 
 ![Ejecución de PyTest P2](docs/images/evidencia_pytest_p2.png)
@@ -770,7 +783,159 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 ### Validación de datos (DeepChecks)
 
-_Pendiente: documentar aquí los chequeos de integridad y de drift entre train/test, y cómo ejecutarlos._
+Las pruebas unitarias comprueban que el código funcione; la validación de datos comprueba que los datos reales estén sanos. Un código correcto puede producir una tabla errónea si los datos de entrada tienen problemas, y por eso se necesitan ambas capas. Se usa [DeepChecks](https://docs.deepchecks.com/) para generar reportes visuales (integridad y drift entre train y test) y pandas para las reglas lógicas del dominio. Las reglas se ejecutan también como pruebas de pytest, de modo que fallan automáticamente si los datos se degradan.
+
+#### P1
+
+| Capa | Datos que revisa | Script (reportes HTML) | Pruebas de pytest |
+|---|---|---|---|
+| **P1 (demanda horaria)** | Tabla de modelado que produce `construir_dataset_p1()`, partida igual que `train_p1` (train: antes de `P1_VAL_INICIO`; test: de `P1_TEST_INICIO` a `P1_TEST_FIN`) | `tests/validar_datos_p1.py` | `tests/test_datos_p1.py` |
+
+| Chequeo | Herramienta | Criterio |
+|---|---|---|
+| Llave `origen_id` + hora única | DeepChecks (`DataDuplicates`) | 0 duplicados |
+| Sin nulos en features ni target | pandas | 0 nulos |
+| Tipos numéricos en features y target | pandas | todas numéricas |
+| Rangos válidos | pandas | demanda y rezagos ≥ 0; `target_hour_sin` y `target_hour_cos` en [-1, 1] |
+| Target no constante | DeepChecks (`IsSingleValue`) | más de un valor |
+| Drift de features entre train y test | DeepChecks (`FeatureDrift`) sobre `lag_1h`, `lag_24h`, `lag_168h`, `rolling_3h`, `rolling_168h` | puntaje < `MAX_DRIFT_FEATURES` |
+| Drift del target entre train y test | DeepChecks (`LabelDrift`) | puntaje < `MAX_DRIFT_TARGET` |
+| Integridad y validación train/test completas | Suites `data_integrity` y `train_test_validation` | reporte HTML para revisión manual |
+| Evaluación del modelo champion | Suite `model_evaluation` (carga `models/p1_champion.pkl`) | reporte HTML para revisión manual; ver *Resultados* |
+
+> La unicidad de duplicados se mide por la llave (estación + hora) y no sobre las features. En horas de poca demanda muchas filas tienen los mismos rezagos de forma legítima, por lo que una revisión solo sobre las features marcaría casi toda la tabla como duplicada (en una prueba con datos sintéticos, 96.7 %, sin ninguna fila realmente repetida).
+
+#### Cómo ejecutar
+
+**1. Generar el parquet de la tabla de modelado una sola vez.** Este archivo **no lo crea el pipeline**: se genera manualmente con el siguiente código y sirve como caché para no reconstruir la tabla en cada ejecución (puede tardar, porque arma la malla horaria por estación). El script de reportes puede prescindir de él, pero las pruebas de pytest sobre datos reales lo necesitan. El archivo es grande y no debe versionarse; la carpeta de salida debe estar en `.gitignore` (se puede comprobar con `git check-ignore data/interim/p1_modelado.parquet`):
+
+```python
+from pathlib import Path
+from proyecto_mibici.features_p1 import construir_dataset_p1
+
+df_p1, _ = construir_dataset_p1()
+Path("data/interim").mkdir(parents=True, exist_ok=True)
+df_p1.to_parquet("data/interim/p1_modelado.parquet", index=False)
+```
+
+**2. Generar los reportes.** El script ejecuta las suites de integridad y de train/test, y la de evaluación del modelo si existe `models/p1_champion.pkl`. Guarda `p1_data_integrity.html`, `p1_train_test_validation.html` y `p1_model_evaluation.html` en `reports/deepchecks/`, e imprime en consola un resumen con los chequeos que fallaron o no corrieron (y su motivo):
+
+```bash
+python -m tests.validar_datos_p1 --parquet data/interim/p1_modelado.parquet
+```
+
+Sin `--parquet`, el script reconstruye la tabla con `construir_dataset_p1()`, lo cual tarda bastante más.
+
+**3. Correr las pruebas de pytest sobre los datos reales.** Estas pruebas no generan reportes: validan reglas (llave única, sin nulos, rangos, drift) y marcan `PASSED` o `FAILED`. Los datos se indican con la variable de entorno `P1_DATASET_PARQUET`:
+
+```bash
+# Linux / macOS
+P1_DATASET_PARQUET=data/interim/p1_modelado.parquet pytest tests/test_datos_p1.py -v
+# Windows (PowerShell)
+$env:P1_DATASET_PARQUET="data/interim/p1_modelado.parquet"; pytest tests/test_datos_p1.py -v
+```
+
+Resultado esperado: **`12 passed`**. Sin la variable de entorno, las 7 pruebas sobre datos reales se saltan y solo corren las 5 sintéticas (`5 passed, 7 skipped`); eso no es un error. Para ver el motivo de cualquier prueba saltada, agregar `-rs`.
+
+La capa general se ejecuta igual, con `--train` y `--test` (o `TRIPS_TRAIN_PARQUET` y `TRIPS_TEST_PARQUET`):
+
+```bash
+python -m proyecto_mibici.modeling.validar_datos_viajes --train <train.parquet> --test <test.parquet>
+```
+
+Los reportes HTML pesan decenas de MB, por lo que no se versionan.
+
+#### Pruebas que validan los propios chequeos
+
+Además de las pruebas sobre los datos reales, `test_datos_p1.py` incluye pruebas con datos sintéticos a los que se les inyectan problemas a propósito (duplicados, drift), para demostrar que los chequeos sí detectan las fallas y no pasan por casualidad.
+
+#### Umbrales de drift y justificación
+
+DeepChecks mide el drift con un puntaje de 0 (distribuciones idénticas) a 1 (completamente distintas). Para variables numéricas el método es Kolmogorov-Smirnov y para el target, V de Cramér. Los umbrales se definen al inicio de `tests/test_datos_p1.py`:
+
+| Parámetro | Valor | Justificación |
+|---|---|---|
+| `MAX_DRIFT_FEATURES` | 0.2 | Valor por defecto de DeepChecks. La propia librería indica que solo existe un estándar de industria para PSI (0.2) y que no hay uno común para KS ni V de Cramér, por lo que el valor se contrasta con la variación natural de nuestros datos. |
+| `MAX_DRIFT_TARGET` | 0.2 | Ídem. |
+
+**Train/test.** `Feature Drift` y `Label Drift` pasaron. El único fallo es `Train Test Samples Mix`: el **51.27 %** de las filas de test aparece idéntico en train (umbral por defecto: 5 %). No se considera fuga de datos, porque las features son rezagos del pasado. Se explica por la naturaleza de la demanda: en test, el **55.96 %** de las horas tiene demanda 0 y el **35.56 %** tiene los tres rezagos (`lag_1h`, `lag_24h`, `lag_168h`) en 0. Además, con features de pocos valores posibles, los patrones de baja demanda se repiten de forma natural. Los ceros por sí solos no explican todo el 51 %; el resto corresponde a esos patrones repetidos. El umbral no se modificó, y la alerta se documenta como un hallazgo.
+
+#### Resultados
+
+Ejecución sobre la tabla de modelado de P1 y el modelo champion. Train: 3,151,513 filas; test: 1,545,271 filas.
+
+| Suite | Pasaron | No pasaron | No corrieron |
+|---|---|---|---|
+| Integridad de datos (train) | 9 | 0 | 3 |
+| Train/test validation | 8 | 1 | 3 |
+| Evaluación del modelo | 6 | 0 | 12 |
+
+**Integridad.** Ningún chequeo falló.
+
+**Train/test.** `Feature Drift` y `Label Drift` pasaron. El único fallo es `Train Test Samples Mix`: el **51.27 %** de las filas de test aparece idéntico en train (umbral por defecto: 5 %). No se considera fuga de datos, porque las features son rezagos del pasado. Se explica por la naturaleza de la demanda: en test, el **55.96 %** de las horas tiene demanda 0 y el **35.56 %** tiene los tres rezagos (`lag_1h`, `lag_24h`, `lag_168h`) en 0. Además, con features de pocos valores posibles, los patrones de baja demanda se repiten de forma natural. Los ceros por sí solos no explican todo el 51 %; el resto corresponde a esos patrones repetidos. El umbral no se modificó, y la alerta se documenta como un hallazgo.
+
+**Hallazgo sobre la demanda.** Más de la mitad de las horas no tienen viajes, es decir, la demanda tiene muchos ceros. Esto respalda haber probado modelos Poisson y Tweedie y explica un R² moderado.
+
+**Desempeño del champion (`Train Test Performance`).**
+
+| Métrica | Train | Test |
+|---|---|---|
+| RMSE | 1.38 | 1.41 |
+| MAE | 0.82 | 0.79 |
+| R² | 0.71 | 0.67 |
+
+La brecha entre train y test es pequeña (el RMSE sube cerca de 2 % y el R² baja unas 0.04), por lo que no se observa sobreajuste marcado. El MAE de test es ligeramente menor que el de train, y el RMSE es ligeramente mayor: una posible explicación es que en test hay menos errores pequeños pero algunos errores grandes en los picos de demanda, algo que se revisaría con la distribución de errores.
+
+#### Chequeos que no corrieron
+
+De los 18 chequeos que no corrieron, **9 no aplican** y **9 se deben a incompatibilidades de DeepChecks 0.19.1 con las versiones del entorno**. Ninguno se debe a los datos ni al modelo.
+
+| Motivo | Chequeos |
+|---|---|
+| No aplica a regresión | Conflicting Labels; New Label Train Test; ROC Report (×2); Confusion Matrix Report (×2); Calibration Score (×2) |
+| No aplica por diseño de la tabla | Index Train Test Leakage (el dataset no tiene un índice) |
+| Incompatibilidad con NumPy 2 | Outlier Sample Detection (`quantile()` ya no acepta `interpolation`); Feature Feature Correlation (`np.NaN` fue eliminado) |
+| Incompatibilidad con scikit-learn 1.6 o posterior | Multivariate Drift, Simple Model Comparison, Weak Segments Performance (×2) y Boosting Overfit (las clases internas de DeepChecks no definen `__sklearn_tags__`); Regression Error Distribution (×2) (`mean_squared_error` ya no acepta el parámetro `squared`) |
+
+Los análisis que esos chequeos habrían aportado se cubren con otras herramientas del proyecto: la comparación contra los baselines ingenuos y las métricas por estación registradas en MLflow, y la distribución de errores se puede calcular directamente a partir de las predicciones.
+
+##### Evidencias
+Reporte de integridad (P1) 
+
+![Reporte de integridad (P1)](docs/images/deepchecks_p1_integridad.png)
+
+Reporte train/test (P1) 
+
+![Reporte de train/test (P1)](docs/images/deepchecks_p1_train_test.png)
+![Reporte de train mix sample](docs/images/deepchecks_p1_samples_mix.png)
+![Reporte de drift_1](docs/images/deepchecks_drift_168h.png)
+![Reporte de drift_2](docs/images/deepchecks_drift_3h.png)
+![Reporte de drift_3](docs/images/deepchecks_drift_24h.png)
+![Reporte de drift_target](docs/images/deepchecks_drift_target.png)
+
+Reporte evaluación del modelo (P1) 
+
+![Reporte de modelo (P1)](docs/images/deepchecks_p1_model.png)
+![Reporte de performance (P1)](docs/images/deepchecks_performance_p1.png)
+
+##### Chequeos que no corrieron
+Reporte de integridad (P1) 
+![No Runs Integridad](docs/images/deepchecks_no_run_integrity.png)
+
+Reporte train/test (P1) 
+![No Runs Train](docs/images/deepchecks_no_run_train.png)
+
+Reporte evaluación del modelo (P1) 
+![No Runs Modelo](docs/images/deepchecks_no_run_model.png)
+
+#### Compatibilidad y limitaciones
+
+- `validar_datos_p1.py` aplica al importarse unos parches de compatibilidad (simula `pkg_resources` en Python 3.14, registra el scorer `max_error`, define `np.Inf` y `__sklearn_tags__`) que DeepChecks necesita para poder importarse. Por eso `tests/test_datos_p1.py` importa primero ese módulo y después DeepChecks; con el orden inverso, la prueba completa se saltaría sin avisar.
+- DeepChecks 0.19.1 es anterior a NumPy 2 y a scikit-learn 1.6. En el entorno del proyecto (Python 3.14, NumPy 2 y scikit-learn 1.6 o posterior) funciona, pero 9 de sus chequeos no se ejecutan (ver *Chequeos que no corrieron*). 
+- Con versiones antiguas (por ejemplo `numpy<2`, `scikit-learn<1.6`, `pandas<2.3`, `setuptools<81`) se verificó en un entorno aparte que los chequeos de datos que dependen de NumPy sí corren; ese entorno no es necesario para esta entrega.
+- DeepChecks no se puede importar con scikit-learn 1.9 ni pandas 3.0. Si no se puede importar en el entorno, las pruebas de este módulo se saltan con un mensaje en lugar de romper el resto de la suite.
+- DeepChecks corre sobre una muestra (en la capa general, 200 000 filas); las reglas de pandas revisan todos los datos.
+- Los umbrales son decisiones del equipo. Los chequeos de P1 validan solo la tabla de P1; las demás preguntas requieren su propio chequeo.
 
 #### P2
 
