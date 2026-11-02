@@ -6,8 +6,10 @@ Ejecución independiente: pytest tests/ -v
 """ 
 
 import json
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from proyecto_mibici.config import (
     FIGURES_DIR,
@@ -27,6 +29,25 @@ from proyecto_mibici.modeling import (
     ClusterEstacionesP3,
     DemandaLinealP1,
     RiesgoLogisticoP2,
+)
+
+pytestmark = pytest.mark.skipif(
+    not all(
+        [
+            TRIPS_PROCESSED_PATH.exists(),
+            STATIONS_PROCESSED_PATH.exists(),
+            TRIPS_TRAIN_PATH.exists(),
+            TRIPS_TEST_PATH.exists(),
+            MANIFEST_PATH.exists(),
+            (MODELS_DIR / "p1_linear_model.pkl").exists(),
+            (MODELS_DIR / "p2_logistic_model.pkl").exists(),
+            (MODELS_DIR / "p3_kmeans_model.pkl").exists(),
+        ]
+    ),
+    reason=(
+        "Requiere ejecutar primero `python -m proyecto_mibici.dataset` y "
+        "`python run_train.py` para generar los Parquets, modelos y reportes."
+    ),
 )
 
 
