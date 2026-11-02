@@ -836,7 +836,7 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 | `test_train_p2_p3.py` | 4 pruebas aprobadas |
 | `test_predict_p2_p3.py` | 6 pruebas aprobadas |
 
-**Resultado final del suite completo:** `155 passed, 0 skipped` (39.81s).
+**Resultado final del suite completo:** `151 passed, 0 skipped` (40.77s).
 
 Todas las pruebas se ejecutan correctamente, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet`.
 
@@ -1115,7 +1115,7 @@ Bandit analiza el código fuente en busca de patrones inseguros (uso de `eval`, 
 pip-audit
 ```
 
-![Auditoría con Audit](docs/images/evidencia_audit.png)
+![Auditoría con pip-audit](docs/images/evidencia_audit.png)
 
 `pip-audit` revisa las dependencias instaladas en busca de vulnerabilidades conocidas (CVEs). Se ejecutó sobre el entorno de entrega y se encontraron vulnerabilidades en dependencias de terceros (pip, pillow, setuptools, pyasn1, certifi, gitpython, mlflow), todas en paquetes del entorno, ninguna en el código del proyecto `proyecto_mibici`. Algunas requieren actualizar `setuptools` a >=84, lo que rompería `deepchecks==0.19.1` (requiere `<81`); documentado como riesgo conocido del entorno.
 
@@ -1127,12 +1127,12 @@ El suite completo de pruebas se ejecuta con un solo comando desde la raíz del r
 pytest -v
 ```
 
-**Resultado obtenido:** `155 passed, 0 skipped` (39.81s).
+**Resultado obtenido:** `151 passed, 0 skipped` (40.77s).
 
-- **146 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
+- **151 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
 - **0 skipped**: Todas las pruebas se ejecutan, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet` (paso manual documentado en este README).
 
-![Suite completo - 145 pruebas aprobadas, 0 skipped](docs/images/suite_completo.webp)
+![Suite completo - 151 pruebas aprobadas, 0 skipped](docs/images/suite_completo.webp)
 
 Las capturas de evidencia por componente se encuentran en `docs/images/`:
 
