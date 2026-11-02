@@ -3,7 +3,7 @@
 """
 Suite de pruebas de integración y validación de artefactos para MiBici.
 Ejecución independiente: pytest tests/ -v
-"""
+""" 
 
 import json
 import numpy as np
