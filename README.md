@@ -1115,7 +1115,7 @@ pytest -v
 
 **Resultado obtenido:** `151 passed, 0 skipped` (29.53s).
 
-- **155 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
+- **151 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
 - **0 skipped**: Todas las pruebas se ejecutan, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet`
 
 ![Suite completo - 151 pruebas aprobadas, 0 skipped](docs/images/suite_completo.webp)
