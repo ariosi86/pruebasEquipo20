@@ -835,7 +835,7 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 | `test_train_p2_p3.py` | 4 pruebas aprobadas |
 | `test_predict_p2_p3.py` | 6 pruebas aprobadas |
 
-**Resultado final del suite completo:** `151 passed, 0 skipped` (40.77s).
+**Resultado final del suite completo:** `152 passed, 3 skipped` (39.37s).
 
 Todas las pruebas se ejecutan correctamente.
 
@@ -1117,12 +1117,14 @@ El suite completo de pruebas se ejecuta con un solo comando desde la raíz del r
 pytest -v
 ```
 
-**Resultado obtenido:** `151 passed, 0 skipped` (40.77s).
+**Resultado obtenido:** `152 passed, 3 skipped` (39.37s).
 
-- **151 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
-- **0 skipped**: Todas las pruebas se ejecutan.
+- **152 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
+- **3 skipped**: Pruebas que requieren el modelo champion (`models/p1_champion.pkl`), eliminado del entorno local; se ejecutan cuando el modelo está presente.
 
-![Suite completo - 151 pruebas aprobadas, 0 skipped](docs/images/suite_completo.webp)
+![Suite completo - 152 pruebas aprobadas, 3 skipped](docs/images/suite_completo.webp)
+
+> **Variante `test_pipeline.py` (entrenamiento de modelo):** esta prueba de integración verifica el entrenamiento completo de modelos y la generación de artefactos. El suite completo reporta **155 pruebas** en total; de ellas, **3 pueden saltarse** si no existe el modelo champion entrenado (`models/p1_champion.pkl`). Es una prueba de entrenamiento de modelo: valida que los modelos se entrenan, serializan y cargan correctamente.
 
 Las capturas de evidencia por componente se encuentran en `docs/images/`:
 
