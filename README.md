@@ -630,6 +630,9 @@ Las pruebas se ubican en la carpeta `tests/` organizadas por componentes:
 - `test_predict_p1.py`: Pipeline de inferencia y generación de reportes.
 - `test_train_p1.py`: Métricas de evaluación (MAE, RMSE, WAPE y sesgo), métricas por estación y tabla comparativa de modelos.
 - `test_reproducibilidad_p1.py`: Reproducibilidad del entrenamiento con semilla fija y control con otra semilla.
+- `test_deepchecks_p1.py`: Validación automática de la tabla de modelado de P1 sobre los datos reales (llave estación + hora única, sin nulos, rangos válidos, sin fuga temporal, drift entre train y test), con resultado `PASSED` o `FAILED`; incluye pruebas con datos sintéticos que comprueban que los chequeos detectan fallas.
+- `validar_datos_p1.py`: Script (no es una prueba) que ejecuta las suites completas de DeepChecks y genera los reportes HTML de integridad, train/test y evaluación del modelo, que se usan como evidencia visual.
+
 
 #### P2
 
@@ -676,14 +679,12 @@ tests/
 - `test_features_facade.py`: La fachada `features.py` expone correctamente la API pública de P1, P2 y P3; todos los elementos de `__all__` son importables.
 - `test_train_p2_p3.py`: Cálculo de métricas de clasificación (precisión, recall, F1, PR-AUC) y métricas de clustering (silhouette, Davies-Bouldin) con casos de borde (una sola etiqueta, predicción perfecta).
 - `test_predict_p2_p3.py`: Carga y guardado de modelos serializados (`.pkl`) para P2 y P3; inferencia con valores válidos en rangos esperados; errores claros si falta el modelo.
-- `test_deepchecks_p1.py`: Validación automática de la tabla de modelado de P1 sobre los datos reales (llave estación + hora única, sin nulos, rangos válidos, sin fuga temporal, drift entre train y test), con resultado `PASSED` o `FAILED`; incluye pruebas con datos sintéticos que comprueban que los chequeos detectan fallas.
-- `validar_datos_p1.py`: Script (no es una prueba) que ejecuta las suites completas de DeepChecks y genera los reportes HTML de integridad, train/test y evaluación del modelo, que se usan como evidencia visual.
 
 ### Instrucciones de Ejecución
 
 1. **Ejecutar suite completa de pruebas:**
 ```bash
-pip install pytest          # (o: pip install -r requirements.txt)
+pip install -r requirements.txt   # Instalar Deepchecks, scikit-learn y pytest
 pytest -v                   # todas las pruebas, con detalle
 ```
 
@@ -699,7 +700,6 @@ pytest tests/test_reproducibilidad_p1.py -v
 
 2. **Ejecutar las pruebas de P2:**
 ```bash
-pip install pytest deepchecks==0.19.1     # (o: pip install -r requirements.txt)
 pytest tests -v -k p2                      # todas las pruebas de P2
 pytest tests/test_features_p2.py -v        # prueba por archivo
 pytest tests/test_model_p2.py -v
@@ -710,7 +710,6 @@ pytest tests/test_deepchecks_p2.py -v
 > Las pruebas unitarias y de reproducibilidad de P2 también usan datos sintéticos y no necesitan MLflow. Solo `test_deepchecks_p2.py` usa el dataset real (ver *Validación de datos (DeepChecks)*).
 3. **Ejecutar las pruebas de P3:**
 ```bash
-pip install deepchecks==0.19.1 "scikit-learn>=1.5.1,<1.6" "setuptools<81"
 pytest tests -v -k p3                        # todas las pruebas de P3
 pytest tests/test_features_p3.py -v          # prueba por archivo
 pytest tests/test_model_p3.py -v
@@ -851,6 +850,7 @@ Las pruebas unitarias comprueban que el código funcione; la validación de dato
 | **P1 (demanda horaria)** | Tabla de modelado que produce `construir_dataset_p1()`, partida igual que `train_p1` (train: antes de `P1_VAL_INICIO`; test: de `P1_TEST_INICIO` a `P1_TEST_FIN`) | `tests/validar_datos_p1.py` | `tests/test_deepchecks_p1.py` |
 
 
+
 | Chequeo | Herramienta | Criterio |
 |---|---|---|
 | Llave `origen_id` + hora única | DeepChecks (`DataDuplicates`) | 0 duplicados |
@@ -879,37 +879,23 @@ El script y el archivo de pruebas se complementan: no ejecutan lo mismo.
 
 #### Cómo ejecutar
 
-**1. Generar el parquet de la tabla de modelado una sola vez.** Este archivo **no lo crea el pipeline**: se genera manualmente con el siguiente código y sirve como caché para no reconstruir la tabla en cada ejecución (puede tardar, porque arma la malla horaria por estación). El script de reportes puede prescindir de él, pero las pruebas de pytest sobre datos reales lo necesitan. El archivo es grande y no debe versionarse; la carpeta de salida debe estar en `.gitignore` (se puede comprobar con `git check-ignore data/interim/p1_modelado.parquet`):
-
-```python
-from pathlib import Path
-from proyecto_mibici.features_p1 import construir_dataset_p1
-
-df_p1, _ = construir_dataset_p1()
-Path("data/interim").mkdir(parents=True, exist_ok=True)
-df_p1.to_parquet("data/interim/p1_modelado.parquet", index=False)
-```
-
-**2. Generar los reportes.** El script ejecuta las suites de integridad y de train/test, y la de evaluación del modelo si existe `models/p1_champion.pkl`. Guarda `p1_data_integrity.html`, `p1_train_test_validation.html` y `p1_model_evaluation.html` en `reports/deepchecks/`, e imprime en consola un resumen con los chequeos que fallaron o no corrieron (y su motivo):
+**1. Generar los reportes HTML (script):**
 
 ```bash
-python -m tests.validar_datos_p1 --parquet data/interim/p1_modelado.parquet # genera los 3 reportes HTML en reports/deepchecks/
+python tests/validar_datos_p1.py --parquet data/interim/p1_modelado.parquet
 ```
 
-Sin `--parquet`, el script reconstruye la tabla con `construir_dataset_p1()`, lo cual tarda bastante más.
+Genera `p1_data_integrity.html`, `p1_train_test_validation.html` y `p1_model_evaluation.html` en `reports/deepchecks/`. Sin `--parquet`, reconstruye la tabla con `construir_dataset_p1()`, lo cual tarda más.
 
-**3. Correr las pruebas de pytest sobre los datos reales.** Estas pruebas no generan reportes: validan reglas (llave única, sin nulos, rangos, drift) y marcan `PASSED` o `FAILED`. Los datos se indican con la variable de entorno `P1_DATASET_PARQUET`:
+**2. Correr las pruebas de pytest sobre los datos reales:**
 
 ```bash
-# Linux / macOS
-P1_DATASET_PARQUET=data/interim/p1_modelado.parquet pytest tests/test_deepchecks_p1.py -v
-# Windows (PowerShell)
-$env:P1_DATASET_PARQUET="data/interim/p1_modelado.parquet"; pytest tests/test_deepchecks_p1.py -v
+pytest tests/test_deepchecks_p1.py -v
 ```
 
-Resultado esperado: 18 passed(9 sobre datos reales y 9 sintéticas). Pueden aparecer avisos de scikit-learn y NumPy; son de DeepChecks y no afectan el resultado. Sin la variable de entorno, las pruebas sobre datos reales se saltan y solo corren las sintéticas; eso no es un error. Para ver el motivo de cualquier prueba saltada, agregar `-rs`.
+Los datos se leen de `data/interim/p1_modelado.parquet` (o de la ruta en la variable de entorno `P1_DATASET_PARQUET`). Si el archivo no existe, la prueba reconstruye la tabla con `construir_dataset_p1()` y la guarda ahí; la primera corrida tarda varios minutos. Si no se puede construir (por ejemplo, faltan los datos procesados), las pruebas sobre datos reales se saltan; el motivo se ve con `-rs`.
 
-La capa general se ejecuta igual, con `--train` y `--test` (o `TRIPS_TRAIN_PARQUET` y `TRIPS_TEST_PARQUET`) usando el script `tests/validar_datos_p1.py`:
+Resultado esperado: 18 passed (9 sobre datos reales y 9 sintéticas). Pueden aparecer avisos de scikit-learn y NumPy; son de DeepChecks y no afectan el resultado.
 
 Los reportes HTML pesan decenas de MB, por lo que no se versionan.
 
@@ -1014,14 +1000,7 @@ Reporte evaluación del modelo (P1)
 
 ```bash
 pytest tests/test_deepchecks_p2.py -v
-#### P3
-
-`tests/test_deepchecks_p3.py` valida el perfil **real** de estaciones que entra a KMeans, construido con las mismas funciones y fechas de `config.py` que `train_p3.py`: entrenamiento con 2025 y prueba con mayo a septiembre de 2026. P3 no tiene variable objetivo, así que los tests usan solo las ocho variables de `P3_VARIABLES`. Si los Parquet de `data/processed/` no existen, las pruebas se omiten (SKIPPED).
-
-```bash
-pytest tests/test_deepchecks_p3.py -v
 ```
-
 | Prueba | Qué valida |
 |---|---|
 | `test_integridad_del_dataset_p2` | Sin nulos, sin tipos mezclados, sin columnas constantes, 0 duplicados de estación y hora, y ninguna variable que prediga el objetivo por sí sola (PPS < 0.8) |
@@ -1042,6 +1021,17 @@ DeepChecks guarda tres reportes HTML en `reports/deepchecks/` (`p2_integridad.ht
 ![DeepChecks: integridad del dataset de P2](docs/images/evidencia_deepchecks_integridad_p2.png)
 
 ![DeepChecks: drift entre entrenamiento y prueba de P2](docs/images/evidencia_deepchecks_drift_p2.png)
+
+#### P3
+
+`tests/test_deepchecks_p3.py` valida el perfil **real** de estaciones que entra a KMeans, construido con las mismas funciones y fechas de `config.py` que `train_p3.py`: entrenamiento con 2025 y prueba con mayo a septiembre de 2026. P3 no tiene variable objetivo, así que los tests usan solo las ocho variables de `P3_VARIABLES`. Si los Parquet de `data/processed/` no existen, las pruebas se omiten (SKIPPED).
+
+```bash
+pytest tests/test_deepchecks_p3.py -v
+```
+
+| Prueba | Qué valida |
+|---|---|
 | `test_integridad_del_perfil_p3[entrenamiento]` | Sin nulos, sin tipos mezclados, ninguna variable constante y ninguna estación con perfil duplicado |
 | `test_integridad_del_perfil_p3[prueba]` | Lo mismo para el perfil de prueba |
 | `test_reglas_de_dominio_p3` | Una fila por estación; proporciones horarias que suman 1; `pct_fin_de_semana` en [0, 1]; `balance_neto` en [-1, 1]; duración media entre 0 y 180 min |
