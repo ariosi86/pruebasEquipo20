@@ -837,7 +837,7 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 
 **Resultado final del suite completo:** `151 passed, 0 skipped` (40.77s).
 
-Todas las pruebas se ejecutan correctamente, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet`.
+Todas las pruebas se ejecutan correctamente.
 
 ### Validación de datos (DeepChecks)
 
@@ -882,7 +882,7 @@ El script y el archivo de pruebas se complementan: no ejecutan lo mismo.
 **1. Generar los reportes HTML (script):**
 
 ```bash
-python tests/validar_datos_p1.py --parquet data/interim/p1_modelado.parquet
+python tests/validar_datos_p1.py
 ```
 
 Genera `p1_data_integrity.html`, `p1_train_test_validation.html` y `p1_model_evaluation.html` en `reports/deepchecks/`. Sin `--parquet`, reconstruye la tabla con `construir_dataset_p1()`, lo cual tarda más.
@@ -1120,7 +1120,7 @@ pytest -v
 **Resultado obtenido:** `151 passed, 0 skipped` (40.77s).
 
 - **151 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, el test del modelo champion (`models/p1_champion.pkl`), las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
-- **0 skipped**: Todas las pruebas se ejecutan, incluidas las de datos reales de P1 con `P1_DATASET_PARQUET=data/interim/p1_modelado.parquet` (paso manual documentado en este README).
+- **0 skipped**: Todas las pruebas se ejecutan.
 
 ![Suite completo - 151 pruebas aprobadas, 0 skipped](docs/images/suite_completo.webp)
 
