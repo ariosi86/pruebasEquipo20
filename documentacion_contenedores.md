@@ -21,6 +21,51 @@ Desde tu máquina (host), accedes a MLflow por `http://localhost:5001` y a cada 
 
 ---
 
+## 1.1 Detalle de cada contenedor
+
+### mlflow — Servidor de tracking y Model Registry
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Qué es** | Servidor MLflow que expone la API de tracking y el Model Registry. |
+| **Qué hace** | Recibe runs de entrenamiento (parámetros, métricas, tags, artefactos), almacena los modelos registrados y los pone a disposición de las APIs a través del alias `@champion`. |
+| **Cómo lo hace** | Ejecuta `mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns --host 0.0.0.0 --port 5000 --serve-artifacts`. Los artefactos (modelos `.pkl`) se guardan en el volumen compartido `mlruns`. El healthcheck consulta `http://localhost:5000`. |
+
+### prep — Job de entrenamiento y registro de campeones
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Qué es** | Contenedor de un solo uso (job) que ejecuta todo el flujo de entrenamiento. |
+| **Qué hace** | 1) Espera a que MLflow esté disponible. 2) Ejecuta `proyecto_mibici.dataset` para descargar y procesar datos de MiBici. 3) Entrena los 3 modelos (P1, P2, P3). 4) Registra los campeones en el Model Registry con alias `@champion` mediante `run_mejor_modelo.py`. |
+| **Cómo lo hace** | Su `entrypoint.sh` ejecuta secuencialmente: `python -m proyecto_mibici.dataset` → `train_p1.py` → `train_p2.py` → `train_p3.py` → `run_mejor_modelo.py`. Termina con código 0 cuando finaliza. Las APIs dependen de que este contenedor termine con éxito (`service_completed_successfully`). |
+
+### api-p1 — API de demanda horaria (P1)
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Qué es** | API REST con FastAPI para predicción de demanda horaria de bicicletas. |
+| **Qué hace** | Expone `GET /health` (verifica que el modelo esté cargado) y `POST /predict` (recibe features de entrada y devuelve la demanda predicha). |
+| **Cómo lo hace** | En cada petición, descarga el modelo desde MLflow Model Registry usando `mlflow.artifacts.download_artifacts()` + `joblib.load()`, ejecuta `modelo.predict(df)` con los datos de entrada y devuelve el resultado en JSON. Variables de entorno: `PREGUNTA=p1`, `MODELO_REGISTRY=mibici-equipo20-p1-demanda@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
+
+### api-p2 — API de riesgo de desbalance (P2)
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Qué es** | API REST con FastAPI para predicción de riesgo de desbalance de estaciones. |
+| **Qué hace** | Expone `GET /health` y `POST /predict`. Devuelve probabilidad de riesgo y clasificación binaria (0/1). |
+| **Cómo lo hace** | Igual que api-p1: descarga el modelo desde MLflow en cada petición, ejecuta `modelo.predict(df)` y `modelo.predict_proba(df)[:, 1]`, y devuelve `prob_riesgo` y `pred_riesgo`. Variables de entorno: `PREGUNTA=p2`, `MODELO_REGISTRY=mibici-equipo20-p2-riesgo@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
+
+### api-p3 — API de clustering de estaciones (P3)
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Qué es** | API REST con FastAPI para clustering funcional de estaciones. |
+| **Qué hace** | Expone `GET /health` y `POST /predict`. Devuelve el número de grupo (cluster) al que pertenece una estación. |
+| **Cómo lo hace** | Igual que las demás APIs: descarga el modelo KMeans desde MLflow en cada petición, ejecuta `modelo.predict(df)` y devuelve `grupo_kmeans`. Variables de entorno: `PREGUNTA=p3`, `MODELO_REGISTRY=mibici-equipo20-p3-grupos@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
+
+---
+
+
 ## 2. Requisitos previos
 
 - **Docker** instalado (versión 20.10+)

@@ -7,26 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================================
-# Opción CI/CD: descargar el código de este repositorio desde GitHub
+# Opción CI/CD: descargar el código de este repositorio desde GitHub (público)
 # ============================================================================
-# Descomenta el bloque de abajo y COMENTA la línea "COPY . ." de debajo
-# si quieres que el contenedor prep baje el código del repositorio en tiempo
-# de construcción (útil en pipelines de CI/CD).
-#
-# Requiere pasar GIT_TOKEN o credenciales como secret en tu plataforma de CI/CD.
-#
-# RUN apt-get update && apt-get install -y --no-install-recommends git \
-#     && rm -rf /var/lib/apt/lists/*
-#
-# ENV GIT_REPO_URL=https://github.com/TC5061-Proyecto-Equipo20/TC5061-Proyecto-Equipo20-prev.git
-# ENV GIT_BRANCH=main
-#
-# RUN git clone --branch $GIT_BRANCH $GIT_REPO_URL /tmp/repo && \
-#     cp -r /tmp/repo/* /app/ && \
-#     rm -rf /tmp/repo
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --branch main https://github.com/ariosi86/pruebasEquipo20.git /tmp/repo && \
+    cp -r /tmp/repo/* /app/ && \
+    rm -rf /tmp/repo
 # ============================================================================
 
-COPY . .
+#COPY . .
 
 COPY docker/prep/entrypoint.sh /usr/local/bin/prep-entrypoint.sh
 RUN chmod +x /usr/local/bin/prep-entrypoint.sh
