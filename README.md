@@ -1175,3 +1175,172 @@ Las capturas de evidencia por componente se encuentran en `docs/images/`:
 ![test_predict_p2_p3.py - inferencia de riesgo y clustering (P2 y P3)](docs/images/test_predict_p2_p3.webp)
 
 ![Pruebas transversales completas - 20 tests aprobados](docs/images/test_pruebas_transversales.webp)
+
+---
+
+# Entrega 4: Empaquetar modelo del proyecto como API REST en contenedor Podman / Docker
+
+## Arquitectura y Tecnologías
+
+- **Framework Web:** FastAPI (con Pydantic para validación de datos)
+- **Model Registry & Tracking:** MLflow
+- **Contenedorización:** Docker / Podman (estándar OCI)
+- **Servidor ASGI:** Uvicorn
+
+## P1 Demanda horaria 
+
+El modelo champion de P1 (LightGBM con objetivo Tweedie) se expone como una API REST
+empaquetada en un contenedor. Predice la demanda de viajes de la hora siguiente
+para una estación de MiBici.
+
+```text
+proyecto_mibici/
+├── api/
+   ├── main.py            #Aplicación principal de FastAPI
+   ├── schemas_p1.py      # P1Entrada (Feature Engineering) y P1Salida
+   └── router_p1.py       # Endpoints: lógica de inferencia, @lru_cache e inyección de dependencias
+├── Containerfile         # Especificación del contenedor (compatible con Docker y Podman)
+└── requirements-api.txt  # Dependencias para el contenedor
+```
+El router de P1 se monta en el `main` general con
+`app.include_router(p1.router, prefix="/p1")`.
+
+### Origen del modelo
+
+El servicio soporta dos modos de operación mediante variables de entorno:
+
+- Opción A (Registry en vivo): Conexión directa al servidor de MLflow para descargar el modelo con alias @champion.
+
+- Opción B (Modo Autónomo / Offline): Inferencia usando artefactos empaquetados localmente dentro de la imagen.
+
+Se empaqueta en la imagen el modelo descargado del Model Registry
+(`mibici-equipo20-p1-demanda`, alias `champion`, versión 1), en lugar de consultar
+MLflow al arrancar. Razones:
+
+- La imagen es autónoma y funciona igual en cualquier máquina, sin depender de
+  que un servidor MLflow esté disponible.
+- Evita problemas de red entre contenedor y host (y el conflicto del puerto 5000
+  con AirPlay en macOS).
+- Desventaja: al cambiar de champion hay que volver a descargar el modelo y
+  reconstruir la imagen.
+
+La carga desde el registry sigue disponible vía `MLFLOW_TRACKING_URI`
+(dejar `P1_MODEL_URI` vacío en Containerfile).
+
+Para descargar el modelo (con MLflow corriendo):
+
+```bash
+python -c 'import mlflow; mlflow.set_tracking_uri("http://127.0.0.1:<PUERTO>"); mlflow.artifacts.download_artifacts(artifact_uri="models:/mibici-equipo20-p1-demanda@champion", dst_path="models/p1")'
+```
+
+
+### Construir y ejecutar
+
+Opción 1: Con Docker
+
+```bash
+# 1. Construir la imagen a partir del Containerfile
+docker build -f Containerfile -t mibici-p1-api:latest .
+
+# 2a. Ejecutar en Modo Autónomo (Opción B)
+docker run -d -p 8000:8000 \
+  -e P1_MODEL_URI="models/p1_champion" \
+  --name servicio_p1 mibici-p1-api:latest
+
+# 2b. Ejecutar conectado a MLflow local (Opción A)
+docker run -d -p 8000:8000 \
+  -e MLFLOW_TRACKING_URI="[http://host.docker.internal:5000](http://host.docker.internal:5000)" \
+  --name servicio_p1 mibici-p1-api:latest
+```
+
+Opción 2: Con Podman
+```bash
+# 1. Iniciar la máquina de Podman (solo macOS)
+podman machine start
+
+# 2. Construir la imagen
+podman build -t mibici-p1-api:latest .
+
+# 3a. Ejecutar en Modo Autónomo (Opción B)
+podman run -d -p 8000:8000 \
+  -e P1_MODEL_URI="models/p1" \
+  --name servicio_p1 mibici-p1-api:latest
+
+# 3b. Ejecutar conectado a MLflow local (Opción A)
+podman run -d -p 8000:8000 \
+  -e MLFLOW_TRACKING_URI="[http://host.containers.internal:5000](http://host.containers.internal:5000)" \
+  --name servicio_p1 mibici-p1-api:latest
+```
+
+Una vez encendido el contenedor, la documentación interactiva de Swagger UI estará disponible en: http://127.0.0.1:8000/docs.
+
+### Consumir la API
+
+![API P1](docs/images/API_P1.png)
+
+`POST /p1/predict`
+
+```bash
+curl -X POST http://127.0.0.1:8000/p1/predict \
+  -H "Content-Type: application/json" \
+  -d '{"origen_id": 12, "target_hour": "2026-11-04T08:00:00", "lag_1h": 5, "lag_24h": 7.0, "lag_168h": 6.0, "rolling_3h": 4.67, "rolling_168h": 5.2}'
+```
+Respuesta:
+
+![API P1 respuesta](docs/images/API_prueba1_P1.png)
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `target_hour` | datetime | Hora a predecir (hora local) |
+| `lag_1h` | entero ≥ 0 | Demanda de la última hora observada |
+| `lag_24h` | número ≥ 0 | Demanda 24 h antes de la hora objetivo |
+| `lag_168h` | número ≥ 0 | Demanda 168 h antes de la hora objetivo |
+| `rolling_3h` | número ≥ 0 | Media de las últimas 3 horas |
+| `rolling_168h` | número ≥ 0 | Media de las últimas 168 horas |
+| `origen_id` | entero (opcional) | ID de estación, solo trazabilidad |
+
+Las variables de calendario (`target_hour_sin`, `target_hour_cos`,
+`target_is_weekend`) se calculan en la API a partir de `target_hour`, para evitar
+entradas inconsistentes. Entradas inválidas (campos faltantes, valores negativos,
+tipos incorrectos) se rechazan con `422`:
+
+##### Valor negativo
+![API con valor incorrecto](docs/images/API_prueba2_P1.png)
+##### Campo faltante
+![API sin un valor](docs/images/API_prueba3_P1.png)
+##### Valor incorrecto
+![API con valor incorrecto](docs/images/API_prueba4_P1.png)
+#### Campo extra
+![API con valor incorrecto](docs/images/API_prueba5_P1.png)
+
+`GET /p1/health` devuelve el estado del servicio y la versión del modelo cargado.
+![API GET](docs/images/API_GET_P1.png)
+
+### Estrategia de despliegue: inferencia en tiempo real
+
+Se eligió inferencia **en tiempo real** (una petición, una predicción) porque:
+
+- El caso de uso, anticipar la demanda de la próxima hora por estación, es sensible
+  al tiempo (por ejemplo, para reubicar bicicletas).
+- Cada predicción usa una sola fila de 8 variables y el modelo es pequeño (~8 MB),
+  por lo que la latencia es baja y el modelo se carga una vez al arrancar.
+- La inferencia por lotes sería preferible para planear todas las estaciones de una
+  vez (por ejemplo, un pronóstico nocturno), y puede construirse sobre el mismo modelo.
+
+**Limitación actual:** el cliente debe enviar los rezagos y medias móviles recientes.
+En un entorno productivo, un servicio con acceso al historial reciente de viajes
+(base de datos o feature store) los calcularía a partir de solo `origen_id` y
+`target_hour`.
+
+### Notas técnicas
+
+- El entrenamiento se hizo con Python 3.14.7; el contenedor usa Python 3.12 porque
+  scikit-learn 1.5.2 no publica wheels para 3.14. Las versiones de las librerías de
+  modelado (mlflow, lightgbm, scikit-learn, numpy, pandas) son idénticas a las del
+  entrenamiento.
+
+### Evidencias contenedor corriendo
+
+![Docker](docs/images/Docker.png)
+![Docker](docs/images/Docker_P1.png)
+

@@ -200,11 +200,18 @@ data/processed/*
 !data/processed/.gitkeep
 data/manifest.json
 
-# Archivos pesados
+# Archivos pesados y carpetas de modelos
 *.csv
 *.parquet
-models/*.pkl
-models/*.joblib
+models/*
+!models/.gitkeep
+*.pkl
+*.joblib
+*.skops
+*.h5
+*.pt
+*.onnx
+
 
 # MLFlow Tracking local
 mlruns/
