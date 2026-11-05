@@ -60,7 +60,7 @@ DEFAULT_HEADERS = {
 
 DATA_URLS = {
     # Nomenclatura más reciente
-    "stations": f"{MIBICI_HOST}/site/assets/files/1118/nomenclatura_2026_09.csv",
+    "stations": f"{MIBICI_HOST}/site/assets/files/1118/nomenclatura_2026_10.csv",
     
     # Año 2025 completo (12 meses cerrados)
    
