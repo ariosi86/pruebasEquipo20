@@ -1,7 +1,8 @@
 import os
 import traceback
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from dotenv import load_dotenv
 
 from model_loader import load_model_and_params
@@ -9,19 +10,25 @@ from schemas import (
     P1Input, P1Output,
     P2Input, P2Output,
     P3Input, P3Output,
-    ValidationError,
 )
 
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app)
+app = FastAPI(title="MiBici API", version="1.0.0")
 
 PREGUNTA = os.environ.get("PREGUNTA", "p1")
 MODELO_REGISTRY = os.environ.get("MODELO_REGISTRY")
 
+# Cache ligero del modelo cargado por petición (evita recargar run_id/version en cada predict interno)
+modelo_name_cache = {}
+
+
 def obtener_modelo_desde_registry():
-    """Carga el modelo desde MLflow en cada petición."""
+    """
+    Carga el modelo desde MLflow Model Registry en cada petición.
+    Diseño intencional: el modelo no va empaquetado en la imagen; se descarga
+    bajo demanda desde MLflow usando download_artifacts + joblib.
+    """
     try:
         return load_model_and_params()
     except Exception as exc:  # noqa: BLE001
@@ -30,18 +37,25 @@ def obtener_modelo_desde_registry():
         return None
 
 
-@app.route("/health", methods=["GET"])
+@app.get("/health", tags=["health"])
 def health():
+    """
+    Estado del servicio. Intenta cargar el campeón desde MLflow.
+    Devuelve 200 si el modelo se lee correctamente, 503 en caso contrario.
+    """
     ctx = obtener_modelo_desde_registry()
     if not ctx:
-        return jsonify({
-            "status": "error",
-            "pregunta": PREGUNTA,
-            "modelo_cargado": False,
-            "error": "Modelo no disponible",
-        }), 503
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "pregunta": PREGUNTA,
+                "modelo_cargado": False,
+                "error": "Modelo no disponible",
+            },
+        )
 
-    return jsonify({
+    return {
         "status": "ok",
         "pregunta": PREGUNTA,
         "modelo_cargado": True,
@@ -52,14 +66,13 @@ def health():
         "model_uri": ctx["model_uri"],
         "parametros_entrenamiento": ctx["params"],
         "tags": ctx["tags"],
-    })
+    }
 
 
-def _predecir_p1(modelo, datos):
-    import pandas as pd
+def _predecir_p1(modelo_obj, datos: dict):
     entrada = P1Input(**datos)
     df = entrada.to_dataframe()
-    pred = modelo.predict(df)
+    pred = modelo_obj.predict(df)
     return P1Output(
         modelo=modelo_name_cache["model_name"],
         version=modelo_name_cache["version"],
@@ -68,13 +81,12 @@ def _predecir_p1(modelo, datos):
     )
 
 
-def _predecir_p2(modelo, datos):
-    import pandas as pd
+def _predecir_p2(modelo_obj, datos: dict):
     entrada = P2Input(**datos)
     df = entrada.to_dataframe()
-    pred = modelo.predict(df)
+    pred = modelo_obj.predict(df)
     try:
-        proba = modelo.predict_proba(df)[:, 1]
+        proba = modelo_obj.predict_proba(df)[:, 1]
         prob_riesgo = float(proba[0])
     except Exception:
         prob_riesgo = float(pred[0])
@@ -87,11 +99,10 @@ def _predecir_p2(modelo, datos):
     )
 
 
-def _predecir_p3(modelo, datos):
-    import pandas as pd
+def _predecir_p3(modelo_obj, datos: dict):
     entrada = P3Input(**datos)
     df = entrada.to_dataframe()
-    pred = modelo.predict(df)
+    pred = modelo_obj.predict(df)
     return P3Output(
         modelo=modelo_name_cache["model_name"],
         version=modelo_name_cache["version"],
@@ -100,17 +111,21 @@ def _predecir_p3(modelo, datos):
     )
 
 
-@app.route("/predict", methods=["POST"])
-def predict():
+@app.post("/predict", tags=["predict"])
+def predict(datos: dict):
+    """
+    Recibe un JSON con las features de la pregunta configurada (PREGUNTA),
+    ejecuta el modelo cargado desde MLflow y devuelve la predicción en JSON.
+    """
     ctx = obtener_modelo_desde_registry()
     if not ctx:
-        return jsonify({
-            "error": "Modelo no cargado. Verifica MLFLOW_TRACKING_URI y MODELO_REGISTRY.",
-        }), 503
-
-    datos = request.get_json(silent=True)
-    if datos is None:
-        return jsonify({"error": "Se espera un cuerpo JSON válido."}), 400
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "Modelo no cargado. Verifica MLFLOW_TRACKING_URI y MODELO_REGISTRY.",
+                "pregunta": PREGUNTA,
+            },
+        )
 
     try:
         modelo_obj = ctx["modelo"]
@@ -118,24 +133,24 @@ def predict():
 
         if PREGUNTA == "p1":
             resultado = _predecir_p1(modelo_obj, datos)
-            return jsonify(resultado.model_dump()), 200
         elif PREGUNTA == "p2":
             resultado = _predecir_p2(modelo_obj, datos)
-            return jsonify(resultado.model_dump()), 200
         elif PREGUNTA == "p3":
             resultado = _predecir_p3(modelo_obj, datos)
-            return jsonify(resultado.model_dump()), 200
         else:
-            return jsonify({"error": f"Pregunta desconocida: {PREGUNTA}"}), 400
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"Pregunta desconocida: {PREGUNTA}"},
+            )
+
+        return resultado.model_dump()
 
     except ValidationError as exc:
-        return jsonify({"error": "Datos de entrada inválidos", "detalle": exc.errors()}), 400
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Datos de entrada inválidos", "detalle": exc.errors()},
+        )
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": str(exc)}), 400
-
-
-modelo_name_cache = {}
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), debug=False)
+        raise HTTPException(status_code=400, detail={"error": str(exc)})

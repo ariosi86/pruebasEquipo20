@@ -1,6 +1,6 @@
 # Documentación de Contenedores — TC5061 Proyecto MiBici (Equipo 20)
 
-Despliegue con **Docker Compose** de la API REST de predicción MiBici con **MLflow** como servidor de tracking y Model Registry, y **3 contenedores de API** (uno por pregunta: P1, P2, P3).
+Despliegue con **Docker Compose** de la API REST de predicción MiBici con **FastAPI** como servidor de aplicaciones y **MLflow** como servidor de tracking y Model Registry, y **3 contenedores de API** (uno por pregunta: P1, P2, P3).
 
 ---
 
@@ -10,9 +10,9 @@ Despliegue con **Docker Compose** de la API REST de predicción MiBici con **MLf
 |----------|-----------|-------------|----------------|-------------|
 | **mlflow** | `mlflow` | `5001` | `5000` | Servidor de tracking + Model Registry |
 | **prep** | `prep` | — | — | Job: ingesta → entrenamientos P1/P2/P3 → registro de campeones |
-| **api-p1** | `api-p1` | `8001` | `8000` | API P1: demanda horaria (regresión) |
-| **api-p2** | `api-p2` | `8002` | `8000` | API P2: riesgo de desbalance (clasificación) |
-| **api-p3** | `api-p3` | `8003` | `8000` | API P3: clustering de estaciones (no supervisado) |
+| **api-p1** | `api-p1` | `8001` | `8000` | API P1: demanda horaria (regresión) — FastAPI + uvicorn |
+| **api-p2** | `api-p2` | `8002` | `8000` | API P2: riesgo de desbalance (clasificación) — FastAPI + uvicorn |
+| **api-p3** | `api-p3` | `8003` | `8000` | API P3: clustering de estaciones (no supervisado) — FastAPI + uvicorn |
 
 Toda la comunicación entre contenedores usa la red interna `mibici-net`.  
 Desde tu máquina (host), accedes a MLflow por `http://localhost:5001` y a cada API por su puerto correspondiente.
@@ -45,7 +45,7 @@ Desde tu máquina (host), accedes a MLflow por `http://localhost:5001` y a cada 
 |---------|---------|
 | **Qué es** | API REST con FastAPI para predicción de demanda horaria de bicicletas. |
 | **Qué hace** | Expone `GET /health` (verifica que el modelo esté cargado) y `POST /predict` (recibe features de entrada y devuelve la demanda predicha). |
-| **Cómo lo hace** | En cada petición, descarga el modelo desde MLflow Model Registry usando `mlflow.artifacts.download_artifacts()` + `joblib.load()`, ejecuta `modelo.predict(df)` con los datos de entrada y devuelve el resultado en JSON. Variables de entorno: `PREGUNTA=p1`, `MODELO_REGISTRY=mibici-equipo20-p1-demanda@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
+| **Cómo lo hace** | En cada petición, descarga el modelo desde MLflow Model Registry usando `mlflow.artifacts.download_artifacts()` + `joblib.load()`, ejecuta `modelo.predict(df)` con los datos de entrada y devuelve el resultado en JSON. Se sirve con `uvicorn app:app --host 0.0.0.0 --port 8000`. Variables de entorno: `PREGUNTA=p1`, `MODELO_REGISTRY=mibici-equipo20-p1-demanda@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
 
 ### api-p2 — API de riesgo de desbalance (P2)
 
@@ -53,7 +53,7 @@ Desde tu máquina (host), accedes a MLflow por `http://localhost:5001` y a cada 
 |---------|---------|
 | **Qué es** | API REST con FastAPI para predicción de riesgo de desbalance de estaciones. |
 | **Qué hace** | Expone `GET /health` y `POST /predict`. Devuelve probabilidad de riesgo y clasificación binaria (0/1). |
-| **Cómo lo hace** | Igual que api-p1: descarga el modelo desde MLflow en cada petición, ejecuta `modelo.predict(df)` y `modelo.predict_proba(df)[:, 1]`, y devuelve `prob_riesgo` y `pred_riesgo`. Variables de entorno: `PREGUNTA=p2`, `MODELO_REGISTRY=mibici-equipo20-p2-riesgo@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
+| **Cómo lo hace** | Igual que api-p1: descarga el modelo desde MLflow en cada petición, ejecuta `modelo.predict(df)` y `modelo.predict_proba(df)[:, 1]`, y devuelve `prob_riesgo` y `pred_riesgo`. Se sirve con `uvicorn app:app`. Variables de entorno: `PREGUNTA=p2`, `MODELO_REGISTRY=mibici-equipo20-p2-riesgo@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
 
 ### api-p3 — API de clustering de estaciones (P3)
 
@@ -61,7 +61,7 @@ Desde tu máquina (host), accedes a MLflow por `http://localhost:5001` y a cada 
 |---------|---------|
 | **Qué es** | API REST con FastAPI para clustering funcional de estaciones. |
 | **Qué hace** | Expone `GET /health` y `POST /predict`. Devuelve el número de grupo (cluster) al que pertenece una estación. |
-| **Cómo lo hace** | Igual que las demás APIs: descarga el modelo KMeans desde MLflow en cada petición, ejecuta `modelo.predict(df)` y devuelve `grupo_kmeans`. Variables de entorno: `PREGUNTA=p3`, `MODELO_REGISTRY=mibici-equipo20-p3-grupos@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
+| **Cómo lo hace** | Igual que las demás APIs: descarga el modelo KMeans desde MLflow en cada petición, ejecuta `modelo.predict(df)` y devuelve `grupo_kmeans`. Se sirve con `uvicorn app:app`. Variables de entorno: `PREGUNTA=p3`, `MODELO_REGISTRY=mibici-equipo20-p3-grupos@champion`, `MLFLOW_TRACKING_URI=http://mlflow:5000`. |
 
 ---
 
@@ -153,7 +153,7 @@ docker compose -f docker/docker-compose.yml up -d
 
 ## 4. Endpoints de las APIs
 
-Todas las APIs exponen los mismos endpoints:
+Todas las APIs están construidas con **FastAPI** y exponen los mismos endpoints:
 
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
@@ -353,6 +353,7 @@ Allí puedes ver:
 
 ## 7. Notas importantes
 
+- Las APIs están construidas con **FastAPI** y se sirven con **uvicorn** (`uvicorn app:app --host 0.0.0.0 --port 8000`).
 - Los campeones se registran en MLflow con el alias **`@champion`**. Cada vez que `prep` se ejecuta, vuelve a registrar y promover a Production/champion.
 - El modelo se carga **en cada petición** desde el Model Registry de MLflow, no se empaqueta en la imagen de la API.
 - Los volúmenes nombrados (`mlruns`) persisten entre reinicios. Usa `down -v` para limpiarlos completamente.
