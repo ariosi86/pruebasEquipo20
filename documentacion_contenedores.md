@@ -433,7 +433,47 @@ Ejemplo de respuesta ante una entrada inválida (caso 2):
 
 ---
 
-## 9. Justificación de decisiones de despliegue
+## 9. Pruebas realizadas (P3)
+
+Pruebas contra `http://localhost:8003/predict` con los contenedores levantados mediante
+Docker Compose. Parten de la petición válida de la sección 4.3 y cambian un solo dato.
+
+### 9.1 Petición válida desde el contenedor
+
+![API prueba1 P3](docs/images/API_prueba1_P3.png)
+
+### 9.2 Validación de entradas
+
+| # | Caso | Cambio al JSON válido | Código esperado | Evidencia |
+|---|------|-----------------------|-----------------|-----------|
+| 1 | Campo faltante | quitar `pct_tarde` | 422 | [Ver captura](docs/images/API_prueba2_P3.png) |
+| 2 | Fracción fuera de rango | `"pct_noche": 1.5` | 422 | [Ver captura](docs/images/API_prueba3_P3.png) |
+| 3 | Franjas horarias suman más de 1 | `"pct_manana": 0.5` | 422 | [Ver captura](docs/images/API_prueba4_P3.png) |
+| 4 | Tipo incorrecto | `"duracion_media": "abc"` | 422 | [Ver captura](docs/images/API_prueba5_P3.png) |
+| 5 | Campo desconocido | agregar `"campo_extra": 1` | 422 | [Ver captura](docs/images/API_prueba6_P3.png) |
+| 6 | Valor `NaN` (con `curl`) | `"viajes_dia_log": NaN` | 422 | [Ver captura](docs/images/API_prueba7_P3.png) |
+| 7 | Duración fuera de rango | `"duracion_media": 500` | 422 | [Ver captura](docs/images/API_prueba8_P3.png) |
+
+Ejemplo de respuesta ante una entrada inválida (caso 3). La regla revisa cuatro campos a la
+vez, por eso `loc` señala el cuerpo completo y el mensaje indica la suma recibida:
+
+```json
+{
+  "detail": [
+    {
+      "type": "value_error",
+      "loc": [
+        "body"
+      ],
+      "msg": "Value error, pct_manana + pct_mediodia + pct_tarde + pct_noche suman 1.240; no pueden pasar de 1"
+    }
+  ]
+}
+```
+
+---
+
+## 10. Justificación de decisiones de despliegue
 
 **Inferencia en tiempo real.** La API responde una predicción por petición. El caso de uso
 (anticipar la demanda de la próxima hora por estación) es sensible al tiempo, cada
