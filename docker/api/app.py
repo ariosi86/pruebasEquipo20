@@ -3,7 +3,7 @@ import traceback
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from dotenv import load_dotenv
+from dotenv import load_dotenv 
 
 from model_loader import load_model_and_params
 from schemas import (
