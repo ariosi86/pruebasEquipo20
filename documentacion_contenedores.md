@@ -295,7 +295,8 @@ curl -X POST http://localhost:8002/predict \
 
 ### 4.3 API P3 — Clustering de estaciones (puerto 8003)
 
-Modelo: `mibici-equipo20-p3-grupos@champion` (KMeans K=4)
+Modelo: `mibici-equipo20-p3-grupos@champion` (Pipeline de sklearn: StandardScaler + KMeans K=4).
+Asigna a una estación uno de los cuatro grupos funcionales según su perfil de uso.
 
 **Health:**
 ```bash
@@ -304,43 +305,50 @@ curl http://localhost:8003/health
 
 **Parámetros de entrada (`POST /predict`):**
 
-| Parámetro | Tipo | Rango | Descripción | Ejemplo |
-|-----------|------|-------|-------------|---------|
-| `pct_manana` | float | 0–1 | Porcentaje mañana | `0.2` |
-| `pct_mediodia` | float | 0–1 | Porcentaje mediodía | `0.3` |
-| `pct_tarde` | float | 0–1 | Porcentaje tarde | `0.25` |
-| `pct_noche` | float | 0–1 | Porcentaje noche | `0.15` |
-| `pct_fin_de_semana` | float | 0–1 | Porcentaje fin de semana | `0.1` |
-| `duracion_media` | float | ≥ 0 | Duración media de viajes | `15` |
-| `viajes_dia_log` | float | — | Viajes por día (log) | `5` |
-| `balance_neto` | float | -1–1 | Balance neto de la estación | `0.0` |
+| Parámetro | Tipo | Restricción | Descripción | Ejemplo |
+|-----------|------|-------------|-------------|---------|
+| `pct_manana` | float | 0–1, finito | Fracción de salidas entre 6 y 10 h | `0.23` |
+| `pct_mediodia` | float | 0–1, finito | Fracción de salidas entre 10 y 16 h | `0.33` |
+| `pct_tarde` | float | 0–1, finito | Fracción de salidas entre 16 y 20 h | `0.29` |
+| `pct_noche` | float | 0–1, finito | Fracción de salidas entre 20 y 24 h | `0.12` |
+| `pct_fin_de_semana` | float | 0–1, finito | Fracción de salidas en sábado o domingo | `0.20` |
+| `duracion_media` | float | > 0 y ≤ 180, finito | Duración media del viaje en minutos | `11.12` |
+| `viajes_dia_log` | float | ≥ 0, finito | log(1 + viajes promedio por día que salen de la estación) | `3.23` |
+| `balance_neto` | float | −1 a 1, finito | (llegadas − salidas) / (llegadas + salidas) | `-0.02` |
 
-**Ejemplo de predicción P3:**
+La suma `pct_manana + pct_mediodia + pct_tarde + pct_noche` puede quedar por debajo de 1,
+porque la madrugada (0 a 6 h) no entra al modelo, pero nunca pasar de 1. El tope de 180
+minutos en `duracion_media` es el mismo que se aplicó en entrenamiento. Los campos que no
+pertenecen al esquema se rechazan.
+
+**Ejemplo de predicción P3** (estación mediana del conjunto de entrenamiento):
 ```bash
 curl -X POST http://localhost:8003/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "pct_manana": 0.2,
-    "pct_mediodia": 0.3,
-    "pct_tarde": 0.25,
-    "pct_noche": 0.15,
-    "pct_fin_de_semana": 0.1,
-    "duracion_media": 15,
-    "viajes_dia_log": 5,
-    "balance_neto": 0.0
+    "pct_manana": 0.23,
+    "pct_mediodia": 0.33,
+    "pct_tarde": 0.29,
+    "pct_noche": 0.12,
+    "pct_fin_de_semana": 0.20,
+    "duracion_media": 11.12,
+    "viajes_dia_log": 3.23,
+    "balance_neto": -0.02
   }'
 ```
 
-**Respuesta esperada:**
+**Respuesta (200):**
 ```json
 {
   "pregunta": "p3",
   "modelo": "mibici-equipo20-p3-grupos",
   "version": "1",
-  "run_id": "...",
+  "run_id": "b56068a70fcb45f7aefd80192eac3fbb",
   "grupo_kmeans": 1
 }
 ```
+
+`grupo_kmeans` es el grupo funcional asignado, entre 0 y 3.
 
 ---
 
