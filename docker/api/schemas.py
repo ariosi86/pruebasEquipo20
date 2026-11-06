@@ -2,7 +2,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 FEATURES_P1 = [
@@ -127,22 +127,82 @@ class P2Output(BaseModel):
 
 
 # --- P3: clustering de estaciones ---
-class P3Input(BaseModel):
-    pct_manana: float = Field(..., ge=0, le=1)
-    pct_mediodia: float = Field(..., ge=0, le=1)
-    pct_tarde: float = Field(..., ge=0, le=1)
-    pct_noche: float = Field(..., ge=0, le=1)
-    pct_fin_de_semana: float = Field(..., ge=0, le=1)
-    duracion_media: float = Field(..., ge=0)
-    viajes_dia_log: float
-    balance_neto: float = Field(..., ge=-1, le=1)
+FEATURES_P3 = [
+    "pct_manana", "pct_mediodia", "pct_tarde", "pct_noche",
+    "pct_fin_de_semana", "duracion_media", "viajes_dia_log", "balance_neto",
+]
 
-    def to_dataframe(self):
-        import pandas as pd
-        return pd.DataFrame([self.model_dump()])[
-            ["pct_manana", "pct_mediodia", "pct_tarde", "pct_noche",
-             "pct_fin_de_semana", "duracion_media", "viajes_dia_log", "balance_neto"]
-        ]
+
+class P3Input(BaseModel):
+    """Perfil de uso de una estación para asignarle un grupo funcional (KMeans K=4).
+
+    Los porcentajes son fracciones (0 a 1) de las salidas de la estación.
+    La madrugada (0 a 6 h) no entra al modelo, por eso las cuatro franjas
+    horarias pueden sumar menos de 1, pero nunca más.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",  # rechaza campos que no existen en el esquema
+        json_schema_extra={
+            "examples": [
+                {
+                    "pct_manana": 0.23,
+                    "pct_mediodia": 0.33,
+                    "pct_tarde": 0.29,
+                    "pct_noche": 0.12,
+                    "pct_fin_de_semana": 0.20,
+                    "duracion_media": 11.12,
+                    "viajes_dia_log": 3.23,
+                    "balance_neto": -0.02,
+                }
+            ]
+        },
+    )
+
+    pct_manana: float = Field(
+        ..., ge=0, le=1, allow_inf_nan=False, examples=[0.23],
+        description="Fracción de salidas entre 6 y 10 h",
+    )
+    pct_mediodia: float = Field(
+        ..., ge=0, le=1, allow_inf_nan=False, examples=[0.33],
+        description="Fracción de salidas entre 10 y 16 h",
+    )
+    pct_tarde: float = Field(
+        ..., ge=0, le=1, allow_inf_nan=False, examples=[0.29],
+        description="Fracción de salidas entre 16 y 20 h",
+    )
+    pct_noche: float = Field(
+        ..., ge=0, le=1, allow_inf_nan=False, examples=[0.12],
+        description="Fracción de salidas entre 20 y 24 h",
+    )
+    pct_fin_de_semana: float = Field(
+        ..., ge=0, le=1, allow_inf_nan=False, examples=[0.20],
+        description="Fracción de salidas en sábado o domingo",
+    )
+    duracion_media: float = Field(
+        ..., gt=0, le=180, allow_inf_nan=False, examples=[11.12],
+        description="Duración media del viaje en minutos (máximo 180, igual que en entrenamiento)",
+    )
+    viajes_dia_log: float = Field(
+        ..., ge=0, allow_inf_nan=False, examples=[3.23],
+        description="log(1 + viajes promedio por día que salen de la estación)",
+    )
+    balance_neto: float = Field(
+        ..., ge=-1, le=1, allow_inf_nan=False, examples=[-0.02],
+        description="(llegadas - salidas) / (llegadas + salidas)",
+    )
+
+    @model_validator(mode="after")
+    def franjas_no_pasan_de_1(self):
+        suma = self.pct_manana + self.pct_mediodia + self.pct_tarde + self.pct_noche
+        if suma > 1 + 1e-6:
+            raise ValueError(
+                f"pct_manana + pct_mediodia + pct_tarde + pct_noche suman {suma:.3f}; no pueden pasar de 1"
+            )
+        return self
+
+    def to_dataframe(self) -> pd.DataFrame:
+        return pd.DataFrame([self.model_dump()], columns=FEATURES_P3).astype("float64")
 
 
 class P3Output(BaseModel):
@@ -150,4 +210,4 @@ class P3Output(BaseModel):
     modelo: str
     version: str
     run_id: str
-    grupo_kmeans: int
+    grupo_kmeans: int = Field(..., ge=0, le=3, description="Grupo funcional asignado (KMeans K=4: 0 a 3)")
