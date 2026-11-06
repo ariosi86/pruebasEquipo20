@@ -481,6 +481,15 @@ predicción usa una sola fila de variables y el modelo es ligero. Una inferencia
 sería preferible para planear todas las estaciones a la vez, y podría construirse sobre los
 mismos modelos del Registry.
 
+**P3: segmentación por lotes y asignación en tiempo real.** La segmentación completa de
+las estaciones se calcula por lotes. El job `prep` reentrena el Pipeline (StandardScaler +
+KMeans K=4) con el histórico y registra el nuevo campeón, y basta con repetirlo cada cierto
+tiempo, porque los grupos cambian cuando cambian los patrones de uso de la red y eso ocurre
+a lo largo de semanas o meses. La API de P3 atiende el caso de una estación nueva o de una
+estación cuyo perfil se actualizó. Le asigna grupo en el momento con los centroides del
+campeón vigente, y el reentrenamiento queda para el siguiente lote. Cada petición procesa
+una sola fila de ocho variables.
+
 **Modelo cargado desde el Model Registry (y no empaquetado en la imagen).** Las APIs
 resuelven el alias `@champion` mediante `MLFLOW_TRACKING_URI` y `MODELO_REGISTRY`.
 - Ventaja: el Registry es la única fuente de verdad. Si `prep` promueve un nuevo champion,
@@ -504,6 +513,10 @@ rechaza campos faltantes, tipos incorrectos, valores negativos, `NaN`, horas con
 horaria y campos desconocidos (`422`), y la respuesta se valida contra el esquema de salida
 (`demanda_predicha ≥ 0`). En P1 el cliente envía `target_hour` y la API deriva las
 variables de calendario, lo que evita entradas incoherentes.
+
+En P3 el esquema exige además que las cuatro franjas horarias sumen como máximo 1 y que
+`duracion_media` quede entre 0 y 180 minutos, el mismo tope usado en entrenamiento. La
+salida restringe `grupo_kmeans` al rango de 0 a 3.
 
 **Limitación actual.** El cliente debe enviar los rezagos y medias móviles recientes. En un
 entorno productivo, un servicio con acceso al historial de viajes (base de datos o feature
