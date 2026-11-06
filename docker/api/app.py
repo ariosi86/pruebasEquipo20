@@ -3,7 +3,8 @@ import traceback
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from dotenv import load_dotenv 
+from dotenv import load_dotenv
+from fastapi.exceptions import RequestValidationError
 
 from model_loader import load_model_and_params
 from schemas import (
@@ -18,6 +19,14 @@ app = FastAPI(title="MiBici API", version="1.0.0")
 
 PREGUNTA = os.environ.get("PREGUNTA", "p1")
 MODELO_REGISTRY = os.environ.get("MODELO_REGISTRY")
+
+# Esquemas por pregunta: FastAPI valida la entrada y documenta entrada y salida en /docs.
+# Para sumar o quitar una pregunta basta con editar estos dos diccionarios.
+# Si PREGUNTA no existe, se cae a dict (sin esquema) y /predict responde 400 como antes.
+MODELS_INPUT = {"p1": P1Input, "p2": P2Input, "p3": P3Input}
+MODELS_OUTPUT = {"p1": P1Output, "p2": P2Output, "p3": P3Output}
+EntradaModel = MODELS_INPUT.get(PREGUNTA, dict)
+SalidaModel = MODELS_OUTPUT.get(PREGUNTA)
 
 # Cache ligero del modelo cargado por petición (evita recargar run_id/version en cada predict interno)
 modelo_name_cache = {}
@@ -111,11 +120,12 @@ def _predecir_p3(modelo_obj, datos: dict):
     )
 
 
-@app.post("/predict", tags=["predict"])
-def predict(datos: dict):
+@app.post("/predict", response_model=SalidaModel, tags=["predict"])
+def predict(datos: EntradaModel): # pyright: ignore[reportInvalidTypeForm]  # esquema elegido por PREGUNTA al arrancar
     """
     Recibe un JSON con las features de la pregunta configurada (PREGUNTA),
     ejecuta el modelo cargado desde MLflow y devuelve la predicción en JSON.
+    El esquema de entrada y salida mostrado en /docs corresponde a esa pregunta.
     """
     ctx = obtener_modelo_desde_registry()
     if not ctx:
@@ -130,13 +140,17 @@ def predict(datos: dict):
     try:
         modelo_obj = ctx["modelo"]
         modelo_name_cache.update(ctx)
+        
+        # Con esquema, FastAPI ya validó y entrega un objeto Pydantic; sin esquema llega un dict
+        datos_dict = datos.model_dump() if hasattr(datos, "model_dump") else datos
+
 
         if PREGUNTA == "p1":
-            resultado = _predecir_p1(modelo_obj, datos)
+            resultado = _predecir_p1(modelo_obj, datos_dict)
         elif PREGUNTA == "p2":
-            resultado = _predecir_p2(modelo_obj, datos)
+            resultado = _predecir_p2(modelo_obj, datos_dict)
         elif PREGUNTA == "p3":
-            resultado = _predecir_p3(modelo_obj, datos)
+            resultado = _predecir_p3(modelo_obj, datos_dict)
         else:
             raise HTTPException(
                 status_code=400,
@@ -154,3 +168,12 @@ def predict(datos: dict):
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail={"error": str(exc)})
+
+@app.exception_handler(RequestValidationError)
+async def validacion_handler(request, exc: RequestValidationError):
+    # Se omite "input" y "ctx": pueden traer NaN/Infinity, que no son JSON válido
+    errores = [
+        {"type": e["type"], "loc": e["loc"], "msg": e["msg"]}
+        for e in exc.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": errores})

@@ -85,7 +85,15 @@ Ejecutar siempre desde la **raíz del repositorio**.
 docker compose -f docker/docker-compose.yml build
 ```
 
-Esto construye 4 servicios: `mlflow`, `prep`, `api-p1`, `api-p2`, `api-p3`.
+Esto construye 5 servicios: `mlflow`, `prep`, `api-p1`, `api-p2` y `api-p3`. 
+
+Las tres APIs comparten la misma imagen (`docker/api/Containerfile`) y se diferencian por la variable
+`PREGUNTA`. El equivalente para construir solo la imagen de la API, desde la raíz del
+repositorio, es:
+
+```bash
+docker build -f docker/api/Containerfile -t mibici-api .
+```
 
 ### 3.2 Levantar todo el flujo
 
@@ -97,6 +105,9 @@ Secuencia automática:
 1. `mlflow` se levanta y pasa el healthcheck.
 2. `prep` espera a MLflow, ejecuta **ingesta → entrenamiento P1/P2/P3 → registro de campeones** en MLflow, y termina.
 3. `api-p1`, `api-p2`, `api-p3` esperan a que `prep` termine (`service_completed_successfully`) y cargan los campeones del Model Registry.
+
+#### Contenedores en ejecución
+![Docker_desktop](docs/images/Docker_completo.png)
 
 ### 3.3 Ver estado de los contenedores
 
@@ -157,16 +168,22 @@ Todas las APIs están construidas con **FastAPI** y exponen los mismos endpoints
 
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
-| `GET` | `/health` | Estado del servicio y si el modelo está cargado |
+| `GET` | `/docs` | Documentación interactiva (Swagger UI) con el esquema de entrada y salida de la pregunta de ese contenedor |
 | `POST` | `/predict` | Recibe JSON con features, devuelve predicción |
 
 El modelo se carga **en cada petición** desde el Model Registry de MLflow (descarga del artefacto + `joblib.load`), no va empaquetado en la imagen.
+
+**Validación de entradas y salidas.** `POST /predict` valida el cuerpo con modelos Pydantic
+(`docker/api/schemas.py`) **antes** de consultar MLflow. Si la entrada no cumple el esquema,
+responde `422 Unprocessable Entity` indicando el campo y el motivo en `detail`. La respuesta
+también se valida contra el esquema de salida de la pregunta.
 
 ---
 
 ### 4.1 API P1 — Demanda horaria (puerto 8001)
 
-Modelo: `mibici-equipo20-p1-demanda@champion` (LightGBM Tweedie)
+Modelo: `mibici-equipo20-p1-demanda@champion` (LightGBM Tweedie). Predice la demanda de
+viajes de la **hora siguiente** para una estación.
 
 **Health:**
 ```bash
@@ -175,43 +192,46 @@ curl http://localhost:8001/health
 
 **Parámetros de entrada (`POST /predict`):**
 
-| Parámetro | Tipo | Descripción | Ejemplo |
-|-----------|------|-------------|---------|
-| `lag_1h` | float | Rezago a 1 hora | `2` |
-| `lag_24h` | float | Rezago a 24 horas | `3` |
-| `lag_168h` | float | Rezago a 168 horas | `1` |
-| `target_hour_sin` | float | Componente seno del ciclo horario | `0.5` |
-| `target_hour_cos` | float | Componente coseno del ciclo horario | `0.8` |
-| `target_is_weekend` | int (0/1) | 1 si es fin de semana, 0 si no | `0` |
-| `rolling_3h` | float | Media móvil de 3 horas | `2.5` |
-| `rolling_168h` | float | Media móvil de 168 horas | `2.0` |
+| Parámetro | Tipo | Restricción | Descripción | Ejemplo |
+|-----------|------|-------------|-------------|---------|
+| `target_hour` | datetime ISO 8601 | sin zona horaria | Hora a predecir (hora local) | `"2026-11-04T08:00:00"` |
+| `lag_1h` | int | ≥ 0 | Demanda de la última hora observada | `5` |
+| `lag_24h` | float | ≥ 0, finito | Demanda 24 h antes de la hora objetivo | `7.0` |
+| `lag_168h` | float | ≥ 0, finito | Demanda 168 h (una semana) antes de la hora objetivo | `6.0` |
+| `rolling_3h` | float | ≥ 0, finito | Media de la demanda de las últimas 3 horas | `4.67` |
+| `rolling_168h` | float | ≥ 0, finito | Media de la demanda de las últimas 168 horas | `5.2` |
+
+El modelo usa 8 variables. Las 3 restantes (`target_hour_sin`, `target_hour_cos` y
+`target_is_weekend`) **no se envían**: la API las calcula a partir de `target_hour`. Así el
+cliente no puede mandar valores de calendario incoherentes entre sí. Los campos que no
+pertenecen al esquema se rechazan.
 
 **Ejemplo de predicción P1:**
 ```bash
 curl -X POST http://localhost:8001/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "lag_1h": 2,
-    "lag_24h": 3,
-    "lag_168h": 1,
-    "target_hour_sin": 0.5,
-    "target_hour_cos": 0.8,
-    "target_is_weekend": 0,
-    "rolling_3h": 2.5,
-    "rolling_168h": 2.0
+    "target_hour": "2026-11-04T08:00:00",
+    "lag_1h": 5,
+    "lag_24h": 7.0,
+    "lag_168h": 6.0,
+    "rolling_3h": 4.67,
+    "rolling_168h": 5.2
   }'
 ```
 
-**Respuesta esperada:**
+**Respuesta (200):**
 ```json
 {
   "pregunta": "p1",
   "modelo": "mibici-equipo20-p1-demanda",
   "version": "1",
-  "run_id": "...",
-  "demanda_predicha": 2.45
+  "run_id": "9a8af9367f7b4422bb215723181a3eed",
+  "demanda_predicha": 8.521118180773497
 }
 ```
+
+`demanda_predicha` es el número esperado de viajes (≥ 0) en la hora objetivo.
 
 ---
 
@@ -348,7 +368,7 @@ Allí puedes ver:
 | API devuelve `"Modelo no disponible"` (503) | `prep` aún no terminó de registrar campeones | Esperar a que `prep` termine (`Exited 0`) |
 | API devuelve 403 en MLflow | Host header no permitido | Verificar `--allowed-hosts` en `docker/mlflow/Containerfile` |
 | `/predict` falla tras cambio de código | Capa `COPY` servida desde caché de Docker | `build --no-cache api-p1 api-p2 api-p3` |
-
+| `/predict` responde `422` | La entrada no cumple el esquema | Revisar `detail[].loc` (campo) y `detail[].msg` (motivo) en la respuesta |
 ---
 
 ## 7. Notas importantes
@@ -358,3 +378,85 @@ Allí puedes ver:
 - El modelo se carga **en cada petición** desde el Model Registry de MLflow, no se empaqueta en la imagen de la API.
 - Los volúmenes nombrados (`mlruns`) persisten entre reinicios. Usa `down -v` para limpiarlos completamente.
 - Puerto de MLflow en host: `5001` (interno `5000`). Puertos de API: `8001`, `8002`, `8003`.
+
+---
+
+## 8. Pruebas realizadas (P1)
+
+Pruebas contra `http://localhost:8001/predict` con los contenedores levantados mediante
+Docker Compose. Parten de la petición válida de la sección 4.1 y cambian un solo dato.
+
+### 8.1 Petición válida desde el contenedor
+
+![API prueba1](docs/images/API_prueba1_P1.png)
+
+### 8.3 Validación de entradas
+
+| # | Caso | Cambio al JSON válido | Código esperado | Evidencia |
+|---|------|-----------------------|-----------------|-----------|
+| 1 | Campo faltante | quitar `lag_24h` | 422 | [Ver captura](docs/images/API_prueba2_P1.png)|
+| 2 | Valor negativo | `"lag_1h": -3` | 422 | [Ver captura](docs/images/API_prueba3_P1.png)|
+| 3 | Entero con decimales | `"lag_1h": 5.7` | 422 | [Ver captura](docs/images/API_prueba4_P1.png)|
+| 4 | Tipo incorrecto | `"lag_24h": "abc"` | 422 | [Ver captura](docs/images/API_prueba5_P1.png)|
+| 5 | Hora con zona horaria | `"target_hour": "2026-11-04T08:00:00Z"` | 422 | [Ver captura](docs/images/API_prueba6_P1.png)|
+| 6 | Campo desconocido | agregar `"campo_extra": 1` | 422 | [Ver captura](docs/images/API_prueba7_P1.png) |
+| 7 | Valor `NaN` (con `curl`) | `"lag_24h": NaN` | 422 |[Ver captura](docs/images/API_prueba8_P1.png) |
+
+Ejemplo de respuesta ante una entrada inválida (caso 2):
+
+```json
+{
+  "detail": [
+    {
+      "type": "greater_than_equal",
+      "loc": [
+        "body",
+        "lag_1h"
+      ],
+      "msg": "Input should be greater than or equal to 0",
+      "input": -3,
+      "ctx": {
+        "ge": 0
+      }
+    }
+  ]
+}
+```
+
+---
+
+## 9. Justificación de decisiones de despliegue
+
+**Inferencia en tiempo real.** La API responde una predicción por petición. El caso de uso
+(anticipar la demanda de la próxima hora por estación) es sensible al tiempo, cada
+predicción usa una sola fila de variables y el modelo es ligero. Una inferencia por lotes
+sería preferible para planear todas las estaciones a la vez, y podría construirse sobre los
+mismos modelos del Registry.
+
+**Modelo cargado desde el Model Registry (y no empaquetado en la imagen).** Las APIs
+resuelven el alias `@champion` mediante `MLFLOW_TRACKING_URI` y `MODELO_REGISTRY`.
+- Ventaja: el Registry es la única fuente de verdad. Si `prep` promueve un nuevo champion,
+  las APIs lo toman sin reconstruir la imagen.
+- Costo: el servicio depende de que MLflow esté disponible (si no lo está, `/health` y
+  `/predict` responden `503`) y el modelo se descarga en cada petición. No se ha medido la
+  latencia que esto añade.
+- Mejora futura: cachear el modelo por `run_id`, consultando solo el alias en cada petición.
+
+**Una imagen, tres servicios.** `api-p1`, `api-p2` y `api-p3` usan la misma imagen y se
+configuran con `PREGUNTA`, de modo que el código es único y cada contenedor documenta en
+`/docs` el esquema de su pregunta.
+
+**Docker Compose.** El flujo necesita coordinar cinco servicios (MLflow, el job de
+entrenamiento y tres APIs), con orden de arranque (`healthcheck` y
+`service_completed_successfully`) y un volumen compartido (`mlruns`) para los artefactos.
+Compose lo reproduce con un solo comando en cualquier máquina.
+
+**Esquemas Pydantic y validación.** FastAPI valida el cuerpo antes de consultar MLflow:
+rechaza campos faltantes, tipos incorrectos, valores negativos, `NaN`, horas con zona
+horaria y campos desconocidos (`422`), y la respuesta se valida contra el esquema de salida
+(`demanda_predicha ≥ 0`). En P1 el cliente envía `target_hour` y la API deriva las
+variables de calendario, lo que evita entradas incoherentes.
+
+**Limitación actual.** El cliente debe enviar los rezagos y medias móviles recientes. En un
+entorno productivo, un servicio con acceso al historial de viajes (base de datos o feature
+store) los calcularía a partir de solo la estación y la hora.
