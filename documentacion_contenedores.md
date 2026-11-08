@@ -398,7 +398,7 @@ Docker Compose. Parten de la petición válida de la sección 4.1 y cambian un s
 
 ![API prueba1](docs/images/API_prueba1_P1.png)
 
-### 8.3 Validación de entradas
+### 8.2 Validación de entradas
 
 | # | Caso | Cambio al JSON válido | Código esperado | Evidencia |
 |---|------|-----------------------|-----------------|-----------|
@@ -432,17 +432,19 @@ Ejemplo de respuesta ante una entrada inválida (caso 2):
 ```
 
 ---
-
 ## 9. Pruebas realizadas (P3)
+---
+
+## 10. Pruebas realizadas (P3)
 
 Pruebas contra `http://localhost:8003/predict` con los contenedores levantados mediante
 Docker Compose. Parten de la petición válida de la sección 4.3 y cambian un solo dato.
 
-### 9.1 Petición válida desde el contenedor
+### 10.1 Petición válida desde el contenedor
 
 ![API prueba1 P3](docs/images/API_prueba1_P3.png)
 
-### 9.2 Validación de entradas
+### 10.2 Validación de entradas
 
 | # | Caso | Cambio al JSON válido | Código esperado | Evidencia |
 |---|------|-----------------------|-----------------|-----------|
@@ -473,7 +475,7 @@ vez, por eso `loc` señala el cuerpo completo y el mensaje indica la suma recibi
 
 ---
 
-## 10. Justificación de decisiones de despliegue
+## 11. Justificación de decisiones de despliegue
 
 **Inferencia en tiempo real.** La API responde una predicción por petición. El caso de uso
 (anticipar la demanda de la próxima hora por estación) es sensible al tiempo, cada
@@ -518,6 +520,6 @@ En P3 el esquema exige además que las cuatro franjas horarias sumen como máxim
 `duracion_media` quede entre 0 y 180 minutos, el mismo tope usado en entrenamiento. La
 salida restringe `grupo_kmeans` al rango de 0 a 3.
 
-**Limitación actual.** El cliente debe enviar los rezagos y medias móviles recientes. En un
+**Limitación actual.** El cliente debe enviar los rezagos y medias móviles recientes para P1. En un
 entorno productivo, un servicio con acceso al historial de viajes (base de datos o feature
 store) los calcularía a partir de solo la estación y la hora.
