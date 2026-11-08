@@ -1179,4 +1179,4 @@ Las capturas de evidencia por componente se encuentran en `docs/images/`:
 ---
 # Entrega 4 Empaquetar modelo del proyecto como API REST en contenedor Docker
 
-Revisar [documentación de contenedore](./documentacion_contenedores.md).
+Revisar [documentación de contenedores](./documentacion_contenedores.md).
