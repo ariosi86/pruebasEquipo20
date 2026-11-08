@@ -1177,3 +1177,6 @@ Las capturas de evidencia por componente se encuentran en `docs/images/`:
 ![Pruebas transversales completas - 20 tests aprobados](docs/images/test_pruebas_transversales.webp)
 
 ---
+# Entrega 4 Empaquetar modelo del proyecto como API REST en contenedor Docker
+
+Revisar [documentación de contenedore](./documentacion_contenedores.md).
