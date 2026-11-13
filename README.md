@@ -1212,15 +1212,28 @@ Para garantizar la vigencia del modelo en producción, se implementó un flujo d
 
 Asegurarse de tener activo el servidor de tracking de MLflow (http://127.0.0.1:5000) antes de ejecutar el flujo desde la raíz del repositorio:
 
-1. Reentrenar modelo candidato (v2):
+### Instalación de Dependencias de Monitoreo
+
+Si aún no se tiene instalada las librerías de Evidently:
+
+```bash
+pip install -r requirements.txt
+# O directamente:
+pip install evidently
+```
+
+
+1. Generar reporte de Data Drift (Evidently AI):
+```bash
+python -m proyecto_mibici.monitoring.drift_report
+```
+
+
+2. Reentrenar modelo candidato (v2):
 ```bash
 python -m proyecto_mibici.modeling.retrain_p1
 ```
 
-2. Generar reporte de Data Drift (Evidently AI):
-```bash
-python -m proyecto_mibici.monitoring.drift_report
-```
 3. Calcular umbral estadístico de mejora a partir de la variación mensual de v1:
 ```bash
 python -m proyecto_mibici.monitoring.umbral_ab_p1
