@@ -41,10 +41,7 @@ La arquitectura del proyecto sigue la estructura estándar de **Cookiecutter Dat
 ├── references/                  <- Diccionarios de datos y manuales explicativos
 ├── reports/                     <- Tablas comparativas de métricas (.csv) y reportes generados
 │   └── figures/                 <- Gráficas exportadas para reportes
-│
 ├── tests/                       <- Suite de pruebas de integración y validación con pytest
-│   └── test_pipeline.py         <- Pruebas unitarias de artefactos, modelos y pipelines
-│
 └── proyecto_mibici/             <- Paquete principal de Python
     ├── __init__.py              <- Metadatos del módulo principal (__version__, __author__)
     ├── config.py                <- Rutas resueltas con pathlib, constantes, URLs y semillas
@@ -727,13 +724,6 @@ pytest tests/test_train_p2_p3.py -v          # métricas de clasificación y clu
 pytest tests/test_predict_p2_p3.py -v        # inferencia de riesgo y clustering (P2 y P3)
 ```
 
-> **Nota sobre `test_pipeline.py`:** esta prueba de integración verifica que existan los Parquets procesados (`data/processed/`), los modelos serializados (`models/*.pkl`) y los reportes generados (`reports/`). Si no se han generado todavía (por ejemplo, en un clon recién descargado), la prueba se **salta automáticamente** en lugar de fallar. Para ejecutarla, correr primero:
-> ```bash
-> python -m proyecto_mibici.dataset   # genera los Parquets de train y test
-> python run_train.py                 # entrena y guarda los 3 modelos
-> ```
-> y luego volver a lanzar `pytest -v`.
-
 ### Qué se prueba (P1: demanda horaria)
 
 | Archivo | Componente | Casos cubiertos |
@@ -835,7 +825,7 @@ Resultado esperado: todas las pruebas en verde (PASSED) al final.
 | `test_train_p2_p3.py` | 4 pruebas aprobadas |
 | `test_predict_p2_p3.py` | 6 pruebas aprobadas |
 
-**Resultado final del suite completo:** `152 passed, 3 skipped` (39.37s).
+**Resultado final del suite completo:** `150 passed, 1 skipped` (44.82s).
 
 Todas las pruebas se ejecutan correctamente.
 
@@ -1117,14 +1107,12 @@ El suite completo de pruebas se ejecuta con un solo comando desde la raíz del r
 pytest -v
 ```
 
-**Resultado obtenido:** `152 passed, 3 skipped` (39.37s).
+**Resultado obtenido:** `150 passed, 1 skipped` (44.82s).
 
-- **152 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
-- **3 skipped**: Pruebas que requieren el modelo champion (`models/p1_champion.pkl`), eliminado del entorno local; se ejecutan cuando el modelo está presente.
+- **150 passed**: Todas las pruebas unitarias de P1, P2 y P3, incluidas las de reproducibilidad con semilla fija, los chequeos de DeepChecks sobre datos reales (P2 y P3), los chequeos sintéticos de DeepChecks de P1, las pruebas de `dataset.py` (ETL e integridad), las pruebas de la fachada `features.py`, y las pruebas de métricas e inferencia de P2 y P3.
+- **1 skipped**: Prueba que requiere el modelo champion (`models/p1_champion.pkl`), eliminado del entorno local; se ejecuta cuando el modelo está presente.
 
-![Suite completo - 152 pruebas aprobadas, 3 skipped](docs/images/suite_completo.webp)
-
-> **Variante `test_pipeline.py` (entrenamiento de modelo):** esta prueba de integración verifica el entrenamiento completo de modelos y la generación de artefactos. El suite completo reporta **155 pruebas** en total; de ellas, **3 pueden saltarse** si no existe el modelo champion entrenado (`models/p1_champion.pkl`). Es una prueba de entrenamiento de modelo: valida que los modelos se entrenan, serializan y cargan correctamente.
+![Suite completo - 150 pruebas aprobadas, 1 skipped](docs/images/suite_completo.webp)
 
 Las capturas de evidencia por componente se encuentran en `docs/images/`:
 
@@ -1179,4 +1167,82 @@ Las capturas de evidencia por componente se encuentran en `docs/images/`:
 ---
 # Entrega 4 Empaquetar modelo del proyecto como API REST en contenedor Docker
 
-Revisar [documentación de contenedores](./documentacion_contenedores.md).
+La implementación de la API se encuentra en la carpeta `docker/api`, organizada de la siguiente manera:
+
+```text
+docker/
+├── .env.example
+├── docker-compose.yml
+└── api/
+    ├── app.py              # Servicio principal FastAPI y endpoints (/predict, /health)
+    ├── Containerfile       # Configuración de la imagen Docker para la API
+    ├── model_loader.py     # Carga y deserialización de modelos desde MLflow
+    ├── predict_p1.py       # Lógica de inferencia para P1
+    ├── predict_p2.py       # Lógica de inferencia para P2
+    ├── predict_p3.py       # Lógica de inferencia para P3
+    ├── schemas.py          # Esquemas Pydantic de entrada/salida y transformación de datos
+    └── requirements.txt    # Dependencias de Python para la API
+```
+
+Revisar [documentación de contenedores](./documentacion_contenedores.md) para obtener detalles de despliegue, variables de entorno y ejecución con Docker Compose.
+
+---
+# Entrega 5 Monitoreo y reporte de drift en el proyecto
+
+Para garantizar la vigencia del modelo en producción, se implementó un flujo de monitoreo continuo, reentrenamiento y validación mediante A/B Testing comparando datos históricos de referencia (octubre 2025) contra datos recientes (octubre 2026).
+
+## Archivos generados y modificados
+
+```text
+
+└── proyecto_mibici/             
+    ├── config.py             <- Nuevo experimento para monitoring, descarga de Octubre 2026.
+    └── modeling/
+        ├── retrain_p1.py     <- Script para reentrenamiento para modelo candidato v2 (challenger).
+        └── tracking.py       <- Módulo de integración defensiva con MLflow Tracking.
+    └── monitoring/
+        ├── __init__.py        
+        ├── ab_test_p1.py     <- Script para evaluar champion vs challenger.
+        ├── drift_report.py   <- Script para generar reporte de Data Drift y Target Drift con Evidently AI.
+        └── umbral_ab_p1.py   <- Script para definir umbral para la evaluación de champion vs challenger.
+    └── reports/drift/        <- Almacena el reporte HTML generado por Evidently AI
+    └── reports/ab_test/      <- Almacena tablas csv de metricas y gráficas de evolución diaria
+```
+## Comandos de Ejecución
+
+Asegurarse de tener activo el servidor de tracking de MLflow (http://127.0.0.1:5000) antes de ejecutar el flujo desde la raíz del repositorio:
+
+1. Reentrenar modelo candidato (v2):
+```bash
+python -m proyecto_mibici.modeling.retrain_p1
+```
+
+2. Generar reporte de Data Drift (Evidently AI):
+```bash
+python -m proyecto_mibici.monitoring.drift_report
+```
+3. Calcular umbral estadístico de mejora a partir de la variación mensual de v1:
+```bash
+python -m proyecto_mibici.monitoring.umbral_ab_p1
+```
+4. Calcula la variabilidad mensual natural del modelo vigente (v1 - Champion) entre mayo y octubre de 2026 para fijar de forma objetiva el umbral mínimo de mejora (--min-mejora-mae).
+
+Resultado obtenido: umbral 7.8
+
+5. Ejecutar evaluación A/B Test (v1 vs v2) con el umbral calibrado (7.8%):
+```bash
+python -m proyecto_mibici.monitoring.ab_test_p1 --min-mejora-mae 7.8
+```
+Ejecuta la evaluación comparativa entre v1 (champion) y v2 (challenger) sobre octubre 2026, aplicando validación bootstrap diaria y cuatro criterios de gobernanza antes de permitir cualquier promoción en el Model Registry.
+
+(Para habilitar la actualización automática de alias en el Model Registry en caso de aprobar todos los criterios, añadir la bandera --promover).
+
+## Resumen de Resultados y Gobernanza
+
+- Detección de Drift (Evidently AI): Se identificó Data Drift en el 66.67% de las variables (6/9), concentrado exclusivamente en la variable objetivo (target_next_hour) y las variables autorregresivas (lag_*, rolling_*) debido a un crecimiento interanual en el volumen promedio (1.84 viajes/hora) y en los picos máximos (73 a 141 viajes/hora). La estacionalidad horaria (target_hour_sin/cos) y de fines de semana permaneció estable.
+
+- Calibración de Umbral: La evaluación longitudinal de v1 (mayo–octubre 2026) arrojó un WAPE medio de 0.6173 con desviación estándar de 0.0479, fijando una variación relativa natural mes a mes de 7.76% (umbral operativo de 7.8%).
+
+- Validación A/B Test (MLflow): Aunque v3 redujo el RMSE en 1.60% y ganó en 25/31 días (IC95% = [0.0010, 0.0033]), su mejora en MAE fue de apenas 0.2143% (muy por debajo del 7.8% requerido), ganó solo en el 29.9% de las estaciones y degradó la Deviance de Tweedie en +32.57% (11.2975 a 14.9769).
+
+- Decisión Automatizada: El gate de promoción rechazó el despliegue y mantuvo v1 (Champion) en producción.
