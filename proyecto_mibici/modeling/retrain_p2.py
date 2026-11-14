@@ -41,6 +41,10 @@ EXPERIMENTO = "mibici-equipo20-p2-monitoreo"
 ALIAS = "challenger"
 VARIABLES = list(P2_VARIABLES)
 
+# Árboles del GBM: skops pide declararlos como confiables. Es seguro porque el
+# modelo se entrena en este mismo script; no se carga de una fuente externa.
+TIPOS_CONFIABLES = ["sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor"]
+
 app = typer.Typer(help="Reentrenamiento de P2 para el A/B testing.")
 
 
@@ -104,7 +108,11 @@ def main(
         ejemplo = X.head(5)
         firma = infer_signature(ejemplo, estimador.predict(ejemplo))
         info = mlflow.sklearn.log_model(
-            estimador, name="model", signature=firma, input_example=ejemplo
+            estimador,
+            name="model",
+            signature=firma,
+            input_example=ejemplo,
+            skops_trusted_types=TIPOS_CONFIABLES,
         )
         run_id = run.info.run_id
 
