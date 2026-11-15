@@ -156,6 +156,20 @@ def decidir_p3(ic_silhouette: tuple, delta_db: float, min_prop_b: float,
     return "MANTENER CHAMPION (sin diferencia clara a favor del challenger)", False
 
 
+def cargar_estimador(modelo_nombre: str, version) -> object:
+    """Carga un modelo registrado como sklearn o, si se guardó con el envoltorio pyfunc
+    del proyecto (tracking.py), el estimador de artifacts/modelo.pkl."""
+    import joblib
+    from mlflow.exceptions import MlflowException
+
+    uri = f"models:/{modelo_nombre}/{version}"
+    try:
+        return mlflow.sklearn.load_model(uri)
+    except MlflowException:
+        ruta = mlflow.artifacts.download_artifacts(artifact_uri=uri)
+        return joblib.load(os.path.join(ruta, "artifacts", "modelo.pkl"))
+
+
 class EvidentlyMonitor:
     """Orquesta la comparación de drift de datos con Evidently y registra
     proyecto, datasets y reportes en la API de Evidently Platform.
@@ -787,6 +801,53 @@ class EvidentlyMonitor:
         return resumen
 
     # ------------------------------------------------------------------ #
+    # Guardado de resultados del A/B testing (CSV + corrida de MLflow)
+    # ------------------------------------------------------------------ #
+    def guardar_ab(self, pregunta: str, resumen: dict, experimento: str) -> Path:
+        """Guarda el resumen de un A/B testing en reports/ab_test/<pregunta>/ y lo registra en MLflow.
+
+        Aplana el diccionario que devuelven ab_test_p1/p2/p3 (métricas, intervalos y
+        criterios) en una tabla clave-valor, la guarda como CSV y abre una corrida en
+        el experimento de monitoreo con las métricas numéricas, el veredicto como tag
+        y el CSV como artefacto.
+        """
+        def aplanar(valor, prefijo=""):
+            if isinstance(valor, dict):
+                for k, v in valor.items():
+                    yield from aplanar(v, f"{prefijo}{k}." if prefijo or k else "")
+            elif isinstance(valor, (list, tuple)) and all(np.isscalar(x) for x in valor):
+                for i, v in enumerate(valor):
+                    yield f"{prefijo}{i}", v
+            else:
+                yield prefijo.rstrip("."), valor
+
+        filas = [{"clave": k, "valor": v} for k, v in aplanar(resumen)]
+        salida = REPORTS_DIR / "ab_test" / pregunta.lower()
+        salida.mkdir(parents=True, exist_ok=True)
+        csv = salida / "ab_resumen.csv"
+        pd.DataFrame(filas).to_csv(csv, index=False)
+
+        numericas = {}
+        for f in filas:
+            v = f["valor"]
+            if isinstance(v, (bool, np.bool_)):
+                v = float(v)
+            if isinstance(v, (int, float, np.integer, np.floating)) and np.isfinite(v):
+                clave = "".join(c if c.isalnum() or c in "._-/ " else "_" for c in f["clave"])
+                numericas[clave] = float(v)
+
+        mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
+        mlflow.set_experiment(experimento)
+        with mlflow.start_run(run_name=f"{pregunta.lower()}_ab_test"):
+            mlflow.set_tags({"question": pregunta.upper(), "stage_of_work": "ab_test",
+                             "veredicto": str(resumen.get("veredicto", ""))})
+            if numericas:
+                mlflow.log_metrics(numericas)
+            mlflow.log_artifact(str(csv), artifact_path=f"ab_test_{pregunta.lower()}")
+        logger.success(f"A/B de {pregunta.upper()} guardado en {csv} y en el experimento {experimento}.")
+        return csv
+
+    # ------------------------------------------------------------------ #
     # A/B testing P1 (regresión)
     # ------------------------------------------------------------------ #
     def ab_test_p1(
@@ -1230,8 +1291,8 @@ class EvidentlyMonitor:
         logger.info(f"A/B P2: {etiqueta_a} vs {etiqueta_b}")
 
         # 1. Cargar modelos desde MLflow
-        modelo_a = mlflow.sklearn.load_model(f"models:/{modelo_nombre}/{va.version}")
-        modelo_b = mlflow.sklearn.load_model(f"models:/{modelo_nombre}/{vb.version}")
+        modelo_a = cargar_estimador(modelo_nombre, va.version)
+        modelo_b = cargar_estimador(modelo_nombre, vb.version)
 
         # 2. Cargar datos de evaluación (julio a septiembre de 2026)
         serie = construir_serie_p2(fin_periodo=P2_FIN_ACTUAL)
@@ -1319,8 +1380,9 @@ class EvidentlyMonitor:
         )
         logger.info("Diferencia B - A (bootstrap por estación, IC 95%):")
         for k, (lo, hi) in ic.items():
+            clave = "f1_score" if k == "f1" else k  # en las métricas globales F1 se llama f1_score
             logger.info(
-                f"  {k:<18} {m_b[k] - m_a[k]:+.4f}  IC [{lo:+.4f}, {hi:+.4f}]"
+                f"  {k:<18} {m_b[clave] - m_a[clave]:+.4f}  IC [{lo:+.4f}, {hi:+.4f}]"
             )
         logger.info(f"B mejor en F1 en {gana_b_pct:.1f}% de las repeticiones")
         logger.success(f"Decisión: {veredicto}")

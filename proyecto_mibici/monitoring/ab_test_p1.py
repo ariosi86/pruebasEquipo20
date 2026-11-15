@@ -52,6 +52,7 @@ def main(
         logger.success("VEREDICTO: reemplazar champion")
     else:
         logger.success("VEREDICTO: mantener champion")
+    monitor.guardar_ab("P1", resumen, experimento)
 
 
 if __name__ == "__main__":

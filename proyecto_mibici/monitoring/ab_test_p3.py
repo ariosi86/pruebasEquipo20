@@ -46,6 +46,7 @@ def main(
         logger.success("VEREDICTO: promover challenger")
     else:
         logger.success("VEREDICTO: mantener champion")
+    monitor.guardar_ab("P3", resumen, "mibici-equipo20-p3-monitoreo")
 
 
 if __name__ == "__main__":
