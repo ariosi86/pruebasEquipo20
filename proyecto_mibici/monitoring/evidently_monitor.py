@@ -45,22 +45,46 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import webbrowser
 
 from evidently import DataDefinition, Dataset, Report
 from evidently.presets import DataDriftPreset, DataSummaryPreset
 from loguru import logger
-import mlflow
 import numpy as np
 import pandas as pd
-from scipy.stats import wasserstein_distance
+from scipy.stats import chi2, wasserstein_distance
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
+from sklearn.metrics import auc, f1_score, mean_tweedie_deviance, precision_recall_curve
 
 from proyecto_mibici.config import (
-    MLFLOW_EXPERIMENT_MONITOREO,
+    EVIDENTLY_PROJECT_NAME,
+    P1_ACTUAL_FIN,
+    P1_FEATURES_V2,
+    P1_TARGET,
+    P1_TEST_FIN,
+    P1_TEST_INICIO,
+    P2_INICIO_VALIDACION,
+    P2_OBJETIVO,
+    P2_VARIABLES,
+    P3_VARIABLES,
     RANDOM_SEED,
     REPORTS_DIR,
-    URI_MLFLOW_TRACKING,
+)
+from proyecto_mibici.monitoring.datos_p2 import (
+    FIN_ACTUAL as P2_FIN_ACTUAL,
+    INICIO_ACTUAL as P2_INICIO_ACTUAL,
+    construir_serie as construir_serie_p2,
 )
 
 # URL del servidor de Evidently UI (API de la plataforma, no solo lectura del frontend).
@@ -542,10 +566,8 @@ class EvidentlyMonitor:
         actual: pd.DataFrame,
         nombre: str,
         *,
-        mlflow_run_name: str | None = None,
-        log_mlflow: bool = True,
         abrir_navegador: bool | None = None,
-        registrar_proyecto_nombre: str | None = None,
+        registrar_proyecto_nombre: str = EVIDENTLY_PROJECT_NAME,
         registrar_proyecto_descripcion: str | None = None,
     ) -> dict:
         """Ejecuta la comparación completa de drift con registro en Evidently.
@@ -559,7 +581,6 @@ class EvidentlyMonitor:
         6. Calcula la tabla de scores complementaria y la guarda como CSV.
         7. Registra el reporte (run) en Evidently Platform.
         8. Guarda metadatos locales JSON para trazabilidad.
-        9. (Opcional) Loguea parámetros/métricas/artefactos a MLflow.
 
         Parametros
         ----------
@@ -569,16 +590,13 @@ class EvidentlyMonitor:
             Conjunto actual (periodo de producción / posterior).
         nombre : str
             Identificador del comparativo (se usa en nombres de archivo).
-        mlflow_run_name : str | None
-            Nombre del run de MLflow. Si es None y ``log_mlflow=True``,
-            se usa ``drift_<nombre>``.
-        log_mlflow : bool
-            Si True, registra el experimento en MLflow.
         abrir_navegador : bool | None
             Si True, abre el HTML en el navegador. Si None, usa el valor
             de ``self.abrir_navegador`` (por defecto False).
-        registrar_proyecto_nombre : str | None
-            Nombre del proyecto a registrar en Evidently. Si None, no se registra proyecto.
+        registrar_proyecto_nombre : str
+            Nombre del proyecto a registrar en Evidently.
+            Por defecto usa ``EVIDENTLY_PROJECT_NAME`` ("proyecto_mibici_equipo20").
+            Pasa ``None`` para no registrar proyecto.
         registrar_proyecto_descripcion : str | None
             Descripción del proyecto.
 
@@ -676,31 +694,747 @@ class EvidentlyMonitor:
             "reporte_id": reporte_id,
         }
 
-        # 7. MLflow (opcional)
-        if log_mlflow:
-            mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
-            mlflow.set_experiment(MLFLOW_EXPERIMENT_MONITOREO)
-            run_name = mlflow_run_name or f"drift_{nombre}"
-            with mlflow.start_run(run_name=run_name):
-                mlflow.log_params(
-                    {
-                        "n_muestra": self.n_muestra,
-                        "num_method": self.num_method,
-                        "cat_method": self.cat_method,
-                        "num_threshold": self.num_threshold,
-                        "cat_threshold": self.cat_threshold,
-                        "n_ref": len(ref_m),
-                        "n_actual": len(cur_m),
-                        "nombre": nombre,
-                        "proyecto_id": self.proyecto_id or "",
-                        "evidently_api": self._evidently_disponible,
-                    }
-                )
-                mlflow.log_metric("vars_con_drift", float(vars_con_drift))
-                mlflow.log_artifacts(str(self.out_dir), artifact_path=f"drift_{nombre}")
-                logger.success(f"Run de MLflow '{run_name}' registrado con artefactos de drift.")
-
         return resumen
+
+    # ------------------------------------------------------------------ #
+    # A/B testing P1 (regresión)
+    # ------------------------------------------------------------------ #
+    def ab_test_p1(
+        self,
+        champion_version: int | None = None,
+        challenger_version: int | None = None,
+        *,
+        min_mejora_mae_pct: float = 1.0,
+        promover: bool = False,
+        experimento: str = "mibici-equipo20-p1-monitoreo",
+        modelo_nombre: str = "mibici-equipo20-p1-demanda",
+        tweedie_power: float = 1.8,
+    ) -> dict:
+        """A/B testing offline de P1 (regresión): champion vs challenger.
+
+        Compara dos versiones del modelo registrado en MLflow Model Registry
+        sobre el mismo conjunto de evaluación (octubre 2026 para P1).
+
+        Parametros
+        ----------
+        champion_version : int | None
+            Versión del champion. Si None, usa el alias 'champion'.
+        challenger_version : int | None
+            Versión del challenger. Si None, usa el alias 'challenger'.
+        min_mejora_mae_pct : float
+            Mejora mínima de MAE (%) para considerar promover.
+        promover : bool
+            Si True y el challenger cumple los criterios, mueve el alias
+            'champion' al challenger.
+        experimento : str
+            Experimento de MLflow donde registrar el A/B test.
+        modelo_nombre : str
+            Nombre del modelo registrado en MLflow Model Registry.
+        tweedie_power : float
+            Parámetro de potencia para la deviance de Tweedie.
+
+        Returns
+        -------
+        dict
+            Resumen con métricas de ambas versiones, cambio relativo,
+            veredicto y criterios cumplidos.
+        """
+        from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+        client = MlflowClient()
+
+        # Resolver versiones
+        if champion_version is None:
+            va = client.get_model_version_by_alias(modelo_nombre, "champion")
+        else:
+            va = client.get_model_version(modelo_nombre, str(champion_version))
+        if challenger_version is None:
+            vb = client.get_model_version_by_alias(modelo_nombre, "challenger")
+        else:
+            vb = client.get_model_version(modelo_nombre, str(challenger_version))
+
+        if va.version == vb.version:
+            raise ValueError("Champion y challenger son la misma versión.")
+
+        etiqueta_a = f"v{va.version} (champion)"
+        etiqueta_b = f"v{vb.version} (challenger)"
+        logger.info(f"A/B P1: {etiqueta_a} vs {etiqueta_b}")
+
+        # 1. Conjunto de evaluación: octubre 2026, el mismo para ambas versiones
+        from proyecto_mibici.features import construir_dataset_p1
+
+        df_p1, _ = construir_dataset_p1()
+        t = df_p1["target_hour"]
+        df = df_p1[(t >= pd.Timestamp(P1_TEST_FIN)) & (t < pd.Timestamp(P1_ACTUAL_FIN))]
+        df = df.dropna(subset=P1_FEATURES_V2 + [P1_TARGET]).copy()
+        if df.empty:
+            raise ValueError("No hay filas de octubre en la tabla de modelado de P1.")
+
+        X = df[P1_FEATURES_V2]
+        y = df[P1_TARGET].to_numpy(dtype=float)
+
+        # 2. Predicciones de ambas versiones
+        modelo_a = mlflow.pyfunc.load_model(f"models:/{modelo_nombre}/{va.version}")
+        modelo_b = mlflow.pyfunc.load_model(f"models:/{modelo_nombre}/{vb.version}")
+        pred_a = np.clip(np.asarray(modelo_a.predict(X), dtype=float).ravel(), 0, None)
+        pred_b = np.clip(np.asarray(modelo_b.predict(X), dtype=float).ravel(), 0, None)
+
+        # 3. Métricas globales
+        def metricas_regresion(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+            mae = float(mean_absolute_error(y_true, y_pred))
+            rmse = float(mean_squared_error(y_true, y_pred) ** 0.5)
+            wape = float(np.abs(y_true - y_pred).sum() / y_true.sum())
+            sesgo = float((y_pred - y_true).mean())
+            deviance = float(
+                mean_tweedie_deviance(y_true, np.clip(y_pred, 1e-6, None), power=tweedie_power)
+            )
+            return {
+                "MAE": mae,
+                "RMSE": rmse,
+                "WAPE": wape,
+                "Sesgo": sesgo,
+                "Deviance_Tweedie": deviance,
+            }
+
+        m_a = metricas_regresion(y, pred_a)
+        m_b = metricas_regresion(y, pred_b)
+
+        # 4. Cambio relativo
+        cambio = {
+            k: (m_b[k] - m_a[k]) / abs(m_a[k]) * 100 if m_a[k] != 0 else float("nan") for k in m_a
+        }
+
+        # 5. Día a día y bootstrap IC95
+        diario = (
+            pd.DataFrame(
+                {
+                    "dia": df["target_hour"].dt.normalize().to_numpy(),
+                    "mae_champion": np.abs(y - pred_a),
+                    "mae_challenger": np.abs(y - pred_b),
+                }
+            )
+            .groupby("dia")
+            .mean()
+        )
+        diario["mejora"] = diario["mae_champion"] - diario["mae_challenger"]
+
+        rng = np.random.default_rng(RANDOM_SEED)
+        n_boot = 5000
+        medias_boot = rng.choice(
+            diario["mejora"].to_numpy(), size=(n_boot, len(diario)), replace=True
+        ).mean(axis=1)
+        ic_inf, ic_sup = (
+            float(np.percentile(medias_boot, 2.5)),
+            float(np.percentile(medias_boot, 97.5)),
+        )
+
+        # 6. Criterios de decisión
+        mejora_mae = (m_a["MAE"] - m_b["MAE"]) / m_a["MAE"] * 100
+        criterios = {
+            f"MAE mejora >= {min_mejora_mae_pct}%": mejora_mae >= min_mejora_mae_pct,
+            "RMSE no empeora": m_b["RMSE"] <= m_a["RMSE"],
+            "IC95% mejora diaria > 0": ic_inf > 0,
+            "Deviance Tweedie no empeora": m_b["Deviance_Tweedie"] <= m_a["Deviance_Tweedie"],
+        }
+        cumple = all(criterios.values())
+
+        # 8. Logs
+        logger.info(
+            "\n" + pd.DataFrame([m_a, m_b], index=[etiqueta_a, etiqueta_b]).round(4).to_string()
+        )
+        logger.info(f"Mejora MAE: {mejora_mae:.2f}% | IC95%: [{ic_inf:.4f}, {ic_sup:.4f}]")
+        logger.success(
+            f"VEREDICTO: {'reemplazar con ' + etiqueta_b if cumple else 'mantener ' + etiqueta_a}"
+        )
+
+        # 9. Promoción
+        if promover and cumple:
+            client.set_registered_model_alias(modelo_nombre, "previous_champion", va.version)
+            client.set_registered_model_alias(modelo_nombre, "champion", vb.version)
+            logger.success(f"Alias 'champion' -> v{vb.version} (anterior: v{va.version}).")
+
+        return {
+            "champion_version": va.version,
+            "challenger_version": vb.version,
+            "champion_run_id": va.run_id,
+            "challenger_run_id": vb.run_id,
+            "metricas_champion": m_a,
+            "metricas_challenger": m_b,
+            "cambio_relativo_pct": cambio,
+            "mejora_mae_pct": float(mejora_mae),
+            "ic95_inf": ic_inf,
+            "ic95_sup": ic_sup,
+            "criterios": criterios,
+            "cumple": cumple,
+            "veredicto": "reemplazar_champion" if cumple else "mantener_champion",
+            "dias_gana_challenger": int((diario["mejora"] > 0).sum()),
+            "total_dias": len(diario),
+        }
+
+    # ------------------------------------------------------------------ #
+    # A/B testing P3 (clustering)
+    # ------------------------------------------------------------------ #
+    def ab_test_p3(
+        self,
+        champion_version: int | None = None,
+        challenger_version: int | None = None,
+        *,
+        n_boot: int = 1000,
+        promover: bool = False,
+        experimento: str = "mibici-equipo20-p3-monitoreo",
+        modelo_nombre: str = "mibici-equipo20-p3-grupos",
+        min_proporcion_grupo: float = 0.05,
+    ) -> dict:
+        """A/B testing de P3 (clustering): champion vs challenger.
+
+        Compara dos versiones de KMeans registradas en MLflow Model Registry
+        sobre el mismo conjunto de estaciones (octubre 2026 para P3).
+        Usa métricas internas de clustering (silhouette, Davies-Bouldin,
+        Calinski-Harabasz) con bootstrap por estación.
+
+        Parametros
+        ----------
+        champion_version : int | None
+            Versión del champion. Si None, usa el alias 'champion'.
+        challenger_version : int | None
+            Versión del challenger. Si None, usa el alias 'challenger'.
+        n_boot : int
+            Repeticiones del bootstrap por estación.
+        promover : bool
+            Si True y el challenger cumple los criterios, mueve el alias
+            'champion' al challenger.
+        experimento : str
+            Experimento de MLflow donde registrar el A/B test.
+        modelo_nombre : str
+            Nombre del modelo registrado en MLflow Model Registry.
+        min_proporcion_grupo : float
+            Proporción mínima de estaciones por grupo para considerar válido.
+
+        Returns
+        -------
+        dict
+            Resumen con métricas de ambas versiones, cambio relativo,
+            bootstrap IC95, veredicto y criterios cumplidos.
+        """
+        import tempfile
+
+        import joblib
+        from scipy.optimize import linear_sum_assignment
+        from sklearn.metrics import (
+            adjusted_rand_score,
+            calinski_harabasz_score,
+            davies_bouldin_score,
+            silhouette_score,
+        )
+        from sklearn.preprocessing import StandardScaler
+
+        from proyecto_mibici.monitoring.datos_p3 import (
+            PERIODOS_P3,
+            cargar_conjunto,
+        )
+
+        client = MlflowClient()
+
+        # Resolver versiones
+        if champion_version is None:
+            va = client.get_model_version_by_alias(modelo_nombre, "champion")
+        else:
+            va = client.get_model_version(modelo_nombre, str(champion_version))
+        if challenger_version is None:
+            vb = client.get_model_version_by_alias(modelo_nombre, "challenger")
+        else:
+            vb = client.get_model_version(modelo_nombre, str(challenger_version))
+
+        if va.version == vb.version:
+            raise ValueError("Champion y challenger son la misma versión.")
+
+        etiqueta_a = f"A: champion (v{va.version})"
+        etiqueta_b = f"B: challenger (v{vb.version})"
+        logger.info(f"A/B P3: {etiqueta_a} vs {etiqueta_b}")
+
+        # 1. Cargar pipelines desde MLflow
+        def cargar_pipeline(mv):
+            destino = tempfile.mkdtemp(prefix=f"p3_v{mv.version}_")
+            ruta = mlflow.artifacts.download_artifacts(
+                artifact_uri=f"runs:/{mv.run_id}/model", dst_path=destino
+            )
+            archivo = os.path.join(ruta, "artifacts", "modelo.pkl")
+            if not os.path.isfile(archivo):
+                raise FileNotFoundError(
+                    f"No se encontró artifacts/modelo.pkl en la versión {mv.version}"
+                )
+            return joblib.load(archivo)
+
+        modelo_a = cargar_pipeline(va)
+        modelo_b = cargar_pipeline(vb)
+
+        # 2. Conjunto de evaluación: octubre 2026
+        actual = cargar_conjunto("actual")
+        X_actual = actual[P3_VARIABLES]
+
+        # 3. Ambas versiones asignan grupo a las mismas estaciones
+        grupos_a = modelo_a.predict(X_actual)
+        grupos_b_crudos = modelo_b.predict(X_actual)
+
+        # KMeans numera grupos de forma arbitraria; mapear B a A por centroide más cercano
+        espacio = StandardScaler().fit(X_actual)
+        X = espacio.transform(X_actual)
+        centros_a = espacio.transform(
+            pd.DataFrame(
+                modelo_a.named_steps["scaler"].inverse_transform(
+                    modelo_a.named_steps["clusterer"].cluster_centers_
+                ),
+                columns=P3_VARIABLES,
+            )
+        )
+        centros_b = espacio.transform(
+            pd.DataFrame(
+                modelo_b.named_steps["scaler"].inverse_transform(
+                    modelo_b.named_steps["clusterer"].cluster_centers_
+                ),
+                columns=P3_VARIABLES,
+            )
+        )
+        costo = ((centros_a[:, None, :] - centros_b[None, :, :]) ** 2).sum(axis=2)
+        filas, columnas = linear_sum_assignment(costo)
+        mapa = {int(b): int(a) for a, b in zip(filas, columnas)}
+        grupos_b = np.vectorize(mapa.get)(grupos_b_crudos)
+
+        # 4. Métricas internas en el mismo espacio
+        def metricas_internas(X_arr: np.ndarray, etiquetas: np.ndarray) -> dict:
+            if len(np.unique(etiquetas)) < 2:
+                return {
+                    "silhouette": np.nan,
+                    "davies_bouldin": np.nan,
+                    "calinski_harabasz": np.nan,
+                }
+            return {
+                "silhouette": float(silhouette_score(X_arr, etiquetas)),
+                "davies_bouldin": float(davies_bouldin_score(X_arr, etiquetas)),
+                "calinski_harabasz": float(calinski_harabasz_score(X_arr, etiquetas)),
+            }
+
+        m_a = metricas_internas(X, grupos_a)
+        m_b = metricas_internas(X, grupos_b)
+
+        # 5. Bootstrap por estación
+        rng = np.random.default_rng(RANDOM_SEED)
+        n = len(X)
+        filas_boot = []
+        for _ in range(n_boot):
+            idx = rng.integers(0, n, n)
+            m_ba = metricas_internas(X[idx], grupos_a[idx])
+            m_bb = metricas_internas(X[idx], grupos_b[idx])
+            filas_boot.append({k: m_bb[k] - m_ba[k] for k in m_ba})
+        boot = pd.DataFrame(filas_boot).dropna()
+        ic = {
+            k: (float(boot[k].quantile(0.025)), float(boot[k].quantile(0.975)))
+            for k in boot.columns
+        }
+        gana_b_pct = float((boot["silhouette"] > 0).mean() * 100)
+
+        # 6. Estabilidad: estaciones que cambian de grupo
+        def proporcionar_cambios(
+            pipeline, perfil_entrenamiento: pd.DataFrame, actual_df: pd.DataFrame
+        ) -> dict:
+            comunes = perfil_entrenamiento.index.intersection(actual_df.index)
+            antes = pipeline.predict(perfil_entrenamiento.loc[comunes, P3_VARIABLES])
+            despues = pipeline.predict(actual_df.loc[comunes, P3_VARIABLES])
+            return {
+                "estaciones_comunes": len(comunes),
+                "cambian_de_grupo": int((antes != despues).sum()),
+                "pct_cambian": float(100 * (antes != despues).mean()),
+            }
+
+        referencia = cargar_conjunto("referencia")
+        reciente = cargar_conjunto("reciente")
+        cambios_a = proporcionar_cambios(modelo_a, referencia, actual)
+        cambios_b = proporcionar_cambios(modelo_b, reciente, actual)
+
+        # 7. Acuerdo entre versiones (ARI)
+        acuerdo = float(adjusted_rand_score(grupos_a, grupos_b))
+
+        # 8. Tamaño de grupos
+        tamanos_a = pd.Series(grupos_a).value_counts().sort_index()
+        tamanos_b = pd.Series(grupos_b).value_counts().sort_index()
+        min_prop_a = float(tamanos_a.min() / len(actual))
+        min_prop_b = float(tamanos_b.min() / len(actual))
+
+        # 9. Criterios de decisión
+        delta_db = m_b["davies_bouldin"] - m_a["davies_bouldin"]
+        cumple = ic["silhouette"][0] > 0 and delta_db <= 0 and min_prop_b >= min_proporcion_grupo
+        if ic["silhouette"][1] < 0:
+            veredicto = "MANTENER CHAMPION (el challenger es peor)"
+        elif cumple:
+            veredicto = "PROMOVER CHALLENGER"
+        else:
+            veredicto = "MANTENER CHAMPION (sin diferencia clara a favor del challenger)"
+
+        # 10. Logs
+        logger.info("\nMétricas internas (octubre 2026):")
+        logger.info(pd.DataFrame([m_a, m_b], index=[etiqueta_a, etiqueta_b]).round(4).to_string())
+        logger.info("Diferencia B - A (bootstrap por estación, IC 95%):")
+        for k, (lo, hi) in ic.items():
+            logger.info(f"  {k:<18} {m_b[k] - m_a[k]:+.4f}  IC [{lo:+.4f}, {hi:+.4f}]")
+        logger.info(f"B mejor en silhouette en {gana_b_pct:.1f}% de las repeticiones")
+        logger.info(f"Acuerdo entre versiones (ARI): {acuerdo:.3f}")
+        logger.success(f"Decisión: {veredicto}")
+
+        # 11. Promoción
+
+        # 12. Promoción
+        if promover and cumple:
+            client.set_registered_model_alias(modelo_nombre, "previous_champion", va.version)
+            client.set_registered_model_alias(modelo_nombre, "champion", vb.version)
+            logger.success(f"Alias 'champion' -> v{vb.version} (anterior: v{va.version}).")
+        elif promover:
+            logger.info("No se mueve el alias: la regla de decisión no lo indica.")
+
+        return {
+            "champion_version": va.version,
+            "challenger_version": vb.version,
+            "champion_run_id": va.run_id,
+            "challenger_run_id": vb.run_id,
+            "metricas_champion": m_a,
+            "metricas_challenger": m_b,
+            "cambio_relativo": {k: float(m_b[k] - m_a[k]) for k in m_a},
+            "ic95": ic,
+            "gana_b_pct": gana_b_pct,
+            "acuerdo_ari": acuerdo,
+            "cambios_champion": cambios_a,
+            "cambios_challenger": cambios_b,
+            "min_prop_champion": min_prop_a,
+            "min_prop_challenger": min_prop_b,
+            "criterios": {
+                "IC95_silhouette > 0": ic["silhouette"][0] > 0,
+                "Davies-Bouldin no empeora": delta_db <= 0,
+                "Min proporcion grupo >= umbral": min_prop_b >= min_proporcion_grupo,
+            },
+            "cumple": cumple,
+            "veredicto": veredicto,
+        }
+
+    # ------------------------------------------------------------------ #
+    # A/B testing P2 (clasificación de riesgo)
+    # ------------------------------------------------------------------ #
+    def ab_test_p2(
+        self,
+        champion_version: Optional[int] = None,
+        challenger_version: Optional[int] = None,
+        *,
+        n_boot: int = 300,
+        promover: bool = False,
+        experimento: str = "mibici-equipo20-p2-monitoreo",
+        modelo_nombre: str = "mibici-equipo20-p2-riesgo",
+    ) -> dict:
+        """A/B testing de P2 (clasificación): champion vs challenger.
+
+        Compara dos versiones del modelo registrado en MLflow Model Registry
+        sobre el mismo conjunto de evaluación (julio a septiembre de 2026 para P2).
+        Diseño pareado: ambas versiones predicen exactamente las mismas filas.
+
+        Métricas: precisión, recall, F1, PR-AUC.
+        Incluye test de McNemar y bootstrap por estación para IC95 de la
+        diferencia B - A en F1 y PR-AUC.
+
+        Regla de decisión (fijada antes de ver resultados):
+        - IC95 de F1 y PR-AUC por encima de 0 -> promover el challenger.
+        - IC95 de F1 y PR-AUC por debajo de 0 -> mantener el champion.
+        - Otro caso -> sin diferencia clara: mantener el champion.
+
+        Parametros
+        ----------
+        champion_version : int | None
+            Versión del champion. Si None, usa el alias 'champion'.
+        challenger_version : int | None
+            Versión del challenger. Si None, usa el alias 'challenger'.
+        n_boot : int
+            Repeticiones del bootstrap por estación.
+        promover : bool
+            Si True y el challenger cumple los criterios, mueve el alias
+            'champion' al challenger.
+        experimento : str
+            Experimento de MLflow donde registrar el A/B test.
+        modelo_nombre : str
+            Nombre del modelo registrado en MLflow Model Registry.
+
+        Returns
+        -------
+        dict
+            Resumen con métricas de ambas versiones, cambio relativo,
+            bootstrap IC95, resultado de McNemar, veredicto y criterios.
+        """
+        client = MlflowClient()
+
+        # Resolver versiones
+        if champion_version is None:
+            va = client.get_model_version_by_alias(modelo_nombre, "champion")
+        else:
+            va = client.get_model_version(modelo_nombre, str(champion_version))
+        if challenger_version is None:
+            vb = client.get_model_version_by_alias(modelo_nombre, "challenger")
+        else:
+            vb = client.get_model_version(modelo_nombre, str(challenger_version))
+
+        if va.version == vb.version:
+            raise ValueError("Champion y challenger son la misma versión.")
+
+        etiqueta_a = f"A: champion (v{va.version})"
+        etiqueta_b = f"B: challenger (v{vb.version})"
+        logger.info(f"A/B P2: {etiqueta_a} vs {etiqueta_b}")
+
+        # 1. Cargar modelos desde MLflow
+        modelo_a = mlflow.sklearn.load_model(f"models:/{modelo_nombre}/{va.version}")
+        modelo_b = mlflow.sklearn.load_model(f"models:/{modelo_nombre}/{vb.version}")
+
+        # 2. Cargar datos de evaluación (julio a septiembre de 2026)
+        serie = construir_serie_p2(fin_periodo=P2_FIN_ACTUAL)
+        inicio = pd.Timestamp(P2_INICIO_ACTUAL)
+        fin = pd.Timestamp(P2_FIN_ACTUAL)
+        en_actual = serie["hora_objetivo"].between(inicio, fin)
+        df = serie[en_actual].reset_index(drop=True)
+
+        # Excluir estaciones nuevas como en la evaluación original
+        df_conocidas = df[~df["estacion_nueva"]].reset_index(drop=True)
+        y = df_conocidas[P2_OBJETIVO].astype(bool).to_numpy()
+        X = df_conocidas[P2_VARIABLES]
+
+        # 3. Predicciones de ambas versiones
+        prob_a = modelo_a.predict_proba(X)[:, 1]
+        pred_a = np.asarray(modelo_a.predict(X)).astype(bool)
+        prob_b = modelo_b.predict_proba(X)[:, 1]
+        pred_b = np.asarray(modelo_b.predict(X)).astype(bool)
+
+        # 4. Métricas globales
+        def metricas_clasificacion(y_true, y_pred, y_prob, nombre: str) -> dict:
+            return {
+                "precision": float(
+                    np.sum((y_pred & y_true)) / max(np.sum(y_pred), 1)
+                ),
+                "recall": float(
+                    np.sum((y_pred & y_true)) / max(np.sum(y_true), 1)
+                ),
+                "f1_score": float(f1_score(y_true, y_pred)),
+                "pr_auc": float(auc(*precision_recall_curve(y_true, y_prob)[1::-1])),
+            }
+
+        m_a = metricas_clasificacion(y, pred_a, prob_a, etiqueta_a)
+        m_b = metricas_clasificacion(y, pred_b, prob_b, etiqueta_b)
+
+        # 5. Test de McNemar
+        ok_a, ok_b = pred_a == y, pred_b == y
+        solo_a = int((ok_a & ~ok_b).sum())
+        solo_b = int((~ok_a & ok_b).sum())
+        total = solo_a + solo_b
+        estadistico = (abs(solo_a - solo_b) - 1) ** 2 / total if total else 0.0
+        p_mcnemar = float(chi2.sf(estadistico, df=1))
+
+        # 6. Bootstrap por estación para IC95 de F1 y PR-AUC (B - A)
+        rng = np.random.default_rng(RANDOM_SEED)
+        grupos = list(df_conocidas.groupby("estacion_id").indices.values())
+        difs = {"f1": [], "pr_auc": []}
+        for _ in range(n_boot):
+            elegidas = rng.integers(0, len(grupos), len(grupos))
+            idx = np.concatenate([grupos[j] for j in elegidas])
+            yy = y[idx]
+            pa, pb = prob_a[idx], prob_b[idx]
+            pa_pred, pb_pred = pred_a[idx], pred_b[idx]
+            difs["f1"].append(float(f1_score(yy, pb_pred)) - float(f1_score(yy, pa_pred)))
+            difs["pr_auc"].append(
+                float(auc(*precision_recall_curve(yy, pb)[1::-1]))
+                - float(auc(*precision_recall_curve(yy, pa)[1::-1]))
+            )
+        boot = pd.DataFrame(difs)
+        ic = {
+            k: (float(boot[k].quantile(0.025)), float(boot[k].quantile(0.975)))
+            for k in boot.columns
+        }
+        gana_b_pct = float((boot["f1"] > 0).mean() * 100)
+
+        # 7. Criterios de decisión
+        inf_f1, sup_f1 = ic["f1"]
+        inf_pr, sup_pr = ic["pr_auc"]
+        cumple = (inf_f1 > 0) and (inf_pr > 0)
+        if (sup_f1 < 0) and (sup_pr < 0):
+            veredicto = "MANTENER CHAMPION (el challenger es peor)"
+        elif cumple:
+            veredicto = "PROMOVER CHALLENGER"
+        else:
+            veredicto = "MANTENER CHAMPION (sin diferencia clara a favor del challenger)"
+
+        # 8. Logs
+        logger.info("\nMétricas de clasificación (julio a septiembre de 2026):")
+        logger.info(
+            pd.DataFrame([m_a, m_b], index=[etiqueta_a, etiqueta_b]).round(4).to_string()
+        )
+        logger.info(
+            f"McNemar: solo A acierta {solo_a:,} | solo B acierta {solo_b:,} | "
+            f"chi2 {estadistico:.2f} | p {p_mcnemar:.3g}"
+        )
+        logger.info("Diferencia B - A (bootstrap por estación, IC 95%):")
+        for k, (lo, hi) in ic.items():
+            logger.info(
+                f"  {k:<18} {m_b[k] - m_a[k]:+.4f}  IC [{lo:+.4f}, {hi:+.4f}]"
+            )
+        logger.info(f"B mejor en F1 en {gana_b_pct:.1f}% de las repeticiones")
+        logger.success(f"Decisión: {veredicto}")
+
+        # 9. Promoción
+
+        # 10. Promoción
+        if promover and cumple:
+            client.set_registered_model_alias(modelo_nombre, "previous_champion", va.version)
+            client.set_registered_model_alias(modelo_nombre, "champion", vb.version)
+            logger.success(
+                f"Alias 'champion' -> v{vb.version} (anterior: v{va.version})."
+            )
+        elif promover:
+            logger.info("No se mueve el alias: la regla de decisión no lo indica.")
+
+        return {
+            "champion_version": va.version,
+            "challenger_version": vb.version,
+            "champion_run_id": va.run_id,
+            "challenger_run_id": vb.run_id,
+            "metricas_champion": m_a,
+            "metricas_challenger": m_b,
+            "cambio_relativo": {k: float(m_b[k] - m_a[k]) for k in m_a},
+            "ic95": ic,
+            "gana_b_pct": gana_b_pct,
+            "mcnemar_solo_a": solo_a,
+            "mcnemar_solo_b": solo_b,
+            "mcnemar_p": p_mcnemar,
+            "mcnemar_chi2": estadistico,
+            "criterios": {
+                "IC95_F1 > 0": inf_f1 > 0,
+                "IC95_PR_AUC > 0": inf_pr > 0,
+            },
+            "cumple": cumple,
+            "veredicto": veredicto,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Umbral de A/B (WAPE mensual)
+    # ------------------------------------------------------------------ #
+    def calcular_umbral_ab(
+        self,
+        champion_version: int | None = None,
+        *,
+        experimento: str = "mibici-equipo20-p1-monitoreo",
+        modelo_nombre: str = "mibici-equipo20-p1-demanda",
+        inicio: str | None = None,
+        fin: str | None = None,
+    ) -> dict:
+        """Calcula el umbral de A/B para P1 a partir de la variación mensual del WAPE.
+
+        Calcula el WAPE de la versión vigente (v1) mes a mes, entre ``inicio`` y
+        ``fin`` (meses que el campeón no usó para entrenar), y toma la variación
+        relativa entre meses (desviación estándar / media) como umbral de mejora:
+        una mejora menor que lo que el error de v1 varía normalmente de un mes a
+        otro no se distingue de ese vaivén.
+
+        Como el A/B se evalúa sobre el mismo conjunto, el cambio relativo del
+        WAPE es igual al del MAE, así que el umbral se usa directo en
+        ``ab_test_p1``.
+
+        Parametros
+        ----------
+        champion_version : int | None
+            Versión del champion. Si None, usa el alias 'champion'.
+        experimento : str
+            Experimento de MLflow donde registrar el cálculo del umbral.
+        modelo_nombre : str
+            Nombre del modelo registrado en MLflow Model Registry.
+        inicio : str | None
+            Fecha de inicio del periodo de evaluación (formato YYYY-MM-DD).
+            Si None, usa ``P1_TEST_INICIO``.
+        fin : str | None
+            Fecha de fin del periodo de evaluación (formato YYYY-MM-DD).
+            Si None, usa ``P1_ACTUAL_FIN``.
+
+        Returns
+        -------
+        dict
+            Tabla mensual de WAPE, media, desviación estándar y el umbral
+            propuesto (redondeado hacia arriba a 0.1%).
+        """
+        import math
+
+        client = MlflowClient()
+
+        if champion_version is None:
+            va = client.get_model_version_by_alias(modelo_nombre, "champion")
+        else:
+            va = client.get_model_version(modelo_nombre, str(champion_version))
+
+        logger.info(f"Calculando umbral A/B para campeón v{va.version}")
+
+        # 1. Conjunto de evaluación
+        inicio = inicio or P1_TEST_INICIO
+        fin = fin or P1_ACTUAL_FIN
+
+        from proyecto_mibici.features import construir_dataset_p1
+
+        df_p1, _ = construir_dataset_p1()
+        t = df_p1["target_hour"]
+        df = df_p1[(t >= pd.Timestamp(inicio)) & (t < pd.Timestamp(fin))]
+        df = df.dropna(subset=P1_FEATURES_V2 + [P1_TARGET]).copy()
+        if df.empty:
+            raise ValueError("No hay filas en el periodo de evaluación para el umbral.")
+
+        modelo = mlflow.pyfunc.load_model(f"models:/{modelo_nombre}/{va.version}")
+        df["pred"] = np.clip(
+            np.asarray(modelo.predict(df[P1_FEATURES_V2]), dtype=float).ravel(), 0, None
+        )
+        df["mes"] = df["target_hour"].dt.to_period("M")
+
+        # 2. WAPE mensual
+        filas = []
+        for mes, g in df.groupby("mes"):
+            y = g[P1_TARGET].to_numpy(dtype=float)
+            p = g["pred"].to_numpy(dtype=float)
+            filas.append(
+                {
+                    "mes": str(mes),
+                    "filas": len(g),
+                    "demanda_media": float(y.mean()),
+                    "MAE": float(np.abs(y - p).mean()),
+                    "WAPE": float(np.abs(y - p).sum() / y.sum()),
+                }
+            )
+        tabla = pd.DataFrame(filas)
+
+        # 3. Umbral: variación relativa mes a mes del WAPE
+        media = float(tabla["WAPE"].mean())
+        desv = float(tabla["WAPE"].std(ddof=1))
+        variacion_pct = desv / media * 100
+        umbral = math.ceil(variacion_pct * 10) / 10  # redondeo hacia arriba a 0.1%
+
+        logger.info("\n" + tabla.round(4).to_string(index=False))
+        logger.info(f"WAPE medio mensual: {media:.4f} | desviación estándar: {desv:.4f}")
+        logger.success(
+            f"Variación relativa mes a mes: {variacion_pct:.2f}% -> "
+            f"UMBRAL propuesto: {umbral}% "
+            f"(usar --min-mejora-mae {umbral} en ab_test_p1)"
+        )
+
+
+        # 5. Guardar tabla localmente
+        salida = REPORTS_DIR / "ab_test"
+        salida.mkdir(parents=True, exist_ok=True)
+        tabla_csv = salida / "umbral_wape_mensual.csv"
+        tabla.to_csv(tabla_csv, index=False)
+        logger.info(f"Tabla guardada en {tabla_csv}")
+
+        return {
+            "campeon_version": va.version,
+            "tabla_wape_mensual": tabla.to_dict("records"),
+            "wape_medio": media,
+            "desv_estandar": desv,
+            "variacion_relativa_pct": variacion_pct,
+            "umbral_propuesto": float(umbral),
+            "tabla_csv": str(tabla_csv),
+        }
 
 
 # ---------------------------------------------------------------------- #

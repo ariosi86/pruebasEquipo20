@@ -40,6 +40,9 @@ MLFLOW_EXPERIMENT_MONITOREO = "mibici-equipo20-p1-monitoreo"
 # Experimento de monitoreo, reentrenamiento y A/B testing de P3
 MLFLOW_EXPERIMENT_MONITOREO_P3 = "mibici-equipo20-p3-monitoreo"
 
+# Nombre del proyecto en Evidently Platform para el monitoreo de drift
+EVIDENTLY_PROJECT_NAME = "proyecto_mibici_equipo20"
+
 
 # ==========================================
 # 2. PARÁMETROS GLOBALES Y TRACKING

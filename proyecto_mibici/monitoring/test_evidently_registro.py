@@ -174,7 +174,10 @@ def test_registro_sin_proyecto() -> None:
     ref = hacer_datos(300, desplazamiento=0.0)
     cur = hacer_datos(300, desplazamiento=5.0)
 
-    resumen = m.comparar(ref, cur, nombre="test_sin_proyecto", log_mlflow=False)
+    resumen = m.comparar(
+        ref, cur, nombre="test_sin_proyecto", log_mlflow=False,
+        registrar_proyecto_nombre=None,
+    )
 
     assert resumen["proyecto_id"] is None
     assert resumen["proyecto_nombre"] is None
@@ -298,15 +301,15 @@ def test_estructura_json_reporte() -> None:
         cur,
         nombre="test_reporte_json",
         log_mlflow=False,
+        registrar_proyecto_nombre="proy-reporte",
     )
 
-    # Buscar el archivo de reporte por nombre (el ID puede ser el de Evidently)
+    # Buscar el archivo de reporte por nombre y proyecto (el ID puede ser el de Evidently)
     archivo_reporte = None
     for f in m.reportes_dir.glob("*.json"):
         datos = json.loads(f.read_text(encoding="utf-8"))
-        if datos.get("nombre") == "test_reporte_json":
+        if datos.get("nombre") == "test_reporte_json" and datos.get("proyecto_nombre") == "proy-reporte":
             archivo_reporte = f
-            datos = datos
             break
     assert archivo_reporte is not None, "No se encontró el archivo de reporte 'test_reporte_json'"
 
