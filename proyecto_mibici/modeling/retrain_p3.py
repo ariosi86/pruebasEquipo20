@@ -9,20 +9,20 @@ periodo con el que se construyen los perfiles:
   champion:    viajes de 2025 (doce meses)
   challenger:  viajes de octubre 2025 a septiembre 2026 (los doce meses previos)
 Se conserva la misma duración para que ambos perfiles promedien un año completo
-de temporadas. Octubre 2026 queda fuera: es el conjunto del A/B testing.
+de temporadas. Octubre 2026 queda fuera porque es el conjunto del A/B testing.
 
 Se registra como nueva versión de mibici-equipo20-p3-grupos con alias
-'challenger', en el experimento de monitoreo de P3. No modifica el alias
-'champion'. El modelo se guarda con el mismo envoltorio pyfunc que el champion,
-así la API puede cargarlo sin cambios si se promueve.
+'challenger', en el experimento de monitoreo de P3. El alias 'champion' se
+queda en la versión vigente. El modelo se guarda con el mismo envoltorio pyfunc
+que el champion, así la API puede cargarlo sin cambios si se promueve.
 """
 
-import mlflow
-import pandas as pd
-import typer
 from loguru import logger
+import mlflow
 from mlflow import MlflowClient
+import pandas as pd
 from sklearn.metrics import calinski_harabasz_score
+import typer
 
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_MONITOREO_P3,

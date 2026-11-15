@@ -14,10 +14,10 @@ Los HTML y CSV quedan en reports/drift/p3/ y se registran en MLflow.
 
 from pathlib import Path
 
+from loguru import logger
 import mlflow
 import pandas as pd
 import typer
-from loguru import logger
 
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_MONITOREO_P3,

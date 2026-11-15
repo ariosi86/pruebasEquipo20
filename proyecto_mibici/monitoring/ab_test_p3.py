@@ -27,15 +27,13 @@ Regla de decisión, fijada antes de ver resultados:
 
 import os
 import tempfile
-from typing import Optional
 
 import joblib
+from loguru import logger
 import mlflow
+from mlflow import MlflowClient
 import numpy as np
 import pandas as pd
-import typer
-from loguru import logger
-from mlflow import MlflowClient
 from scipy.optimize import linear_sum_assignment
 from sklearn.metrics import (
     adjusted_rand_score,
@@ -44,6 +42,7 @@ from sklearn.metrics import (
     silhouette_score,
 )
 from sklearn.preprocessing import StandardScaler
+import typer
 
 from proyecto_mibici.config import (
     MLFLOW_EXPERIMENT_MONITOREO_P3,
@@ -61,7 +60,7 @@ MIN_PROPORCION_GRUPO = 0.05
 app = typer.Typer(help="A/B testing de P3: champion vs challenger.")
 
 
-def resolver_version(client: MlflowClient, version: Optional[int], alias: str):
+def resolver_version(client: MlflowClient, version: int | None, alias: str):
     if version is None:
         return client.get_model_version_by_alias(NOMBRE_MODELO, alias)
     return client.get_model_version(NOMBRE_MODELO, str(version))
@@ -113,7 +112,7 @@ def proporcion_cambios(pipeline, perfil_entrenamiento: pd.DataFrame, actual: pd.
     antes = pipeline.predict(perfil_entrenamiento.loc[comunes, P3_VARIABLES])
     despues = pipeline.predict(actual.loc[comunes, P3_VARIABLES])
     return {
-        "estaciones_comunes": int(len(comunes)),
+        "estaciones_comunes": len(comunes),
         "cambian_de_grupo": int((antes != despues).sum()),
         "pct_cambian": float(100 * (antes != despues).mean()),
     }
@@ -129,8 +128,8 @@ def decidir(ic_silhouette: tuple, delta_db: float, min_prop_b: float) -> tuple:
 
 @app.command()
 def main(
-    champion_version: Optional[int] = typer.Option(None, "--champion-version", help="Por defecto, alias 'champion'."),
-    challenger_version: Optional[int] = typer.Option(None, "--challenger-version", help="Por defecto, alias 'challenger'."),
+    champion_version: int | None = typer.Option(None, "--champion-version", help="Por defecto, alias 'champion'."),
+    challenger_version: int | None = typer.Option(None, "--challenger-version", help="Por defecto, alias 'challenger'."),
     n_boot: int = typer.Option(1000, "--n-boot", help="Repeticiones del bootstrap por estación."),
     promover: bool = typer.Option(False, "--promover", help="Mueve el alias 'champion' si la regla lo indica."),
 ):
@@ -143,13 +142,13 @@ def main(
 
     modelo_a, modelo_b = cargar_pipeline(va), cargar_pipeline(vb)
 
-    # 1. Mismo examen para ambas versiones
+    # 1. Ambas versiones asignan grupo a las mismas estaciones de octubre 2026
     actual = cargar_conjunto("actual")
     X_actual = actual[P3_VARIABLES]
     grupos_a = modelo_a.predict(X_actual)
     grupos_b_crudos = modelo_b.predict(X_actual)
 
-    # Los números de grupo de KMeans son arbitrarios: se renombran los de B al grupo de A más parecido
+    # KMeans numera sus grupos de forma arbitraria, así que cada grupo de B toma el número del grupo de A más parecido
     espacio = StandardScaler().fit(X_actual)
     X = espacio.transform(X_actual)
     centros_a = espacio.transform(pd.DataFrame(

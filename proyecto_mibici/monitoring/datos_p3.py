@@ -18,9 +18,9 @@ mide sobre las mismas ocho variables que recibe el modelo.
 
 from pathlib import Path
 
+from loguru import logger
 import pandas as pd
 import typer
-from loguru import logger
 
 from proyecto_mibici.config import (
     P3_DURACION_MAX_MIN,
