@@ -52,6 +52,8 @@ import webbrowser
 from evidently import DataDefinition, Dataset, Report
 from evidently.presets import DataDriftPreset, DataSummaryPreset
 from loguru import logger
+import mlflow
+from mlflow import MlflowClient
 import numpy as np
 import pandas as pd
 from scipy.stats import chi2, wasserstein_distance
@@ -69,6 +71,7 @@ from sklearn.metrics import auc, f1_score, mean_tweedie_deviance, precision_reca
 
 from proyecto_mibici.config import (
     EVIDENTLY_PROJECT_NAME,
+    MLFLOW_EXPERIMENT_MONITOREO,
     P1_ACTUAL_FIN,
     P1_FEATURES_V2,
     P1_TARGET,
@@ -80,6 +83,7 @@ from proyecto_mibici.config import (
     P3_VARIABLES,
     RANDOM_SEED,
     REPORTS_DIR,
+    URI_MLFLOW_TRACKING,
 )
 from proyecto_mibici.monitoring.datos_p2 import (
     FIN_ACTUAL as P2_FIN_ACTUAL,
@@ -89,6 +93,67 @@ from proyecto_mibici.monitoring.datos_p2 import (
 
 # URL del servidor de Evidently UI (API de la plataforma, no solo lectura del frontend).
 EVIDENTLY_API_URL = "http://127.0.0.1:8000"
+
+
+# ---------------------------------------------------------------------- #
+# Funciones del A/B testing de P3 (clustering), usadas por ab_test_p3()
+# ---------------------------------------------------------------------- #
+def metricas_internas(X: np.ndarray, etiquetas: np.ndarray) -> dict:
+    """Silhouette, Davies-Bouldin y Calinski-Harabasz de una asignación de grupos."""
+    from sklearn.metrics import calinski_harabasz_score, davies_bouldin_score, silhouette_score
+
+    if len(np.unique(etiquetas)) < 2:
+        return {"silhouette": np.nan, "davies_bouldin": np.nan, "calinski_harabasz": np.nan}
+    return {
+        "silhouette": float(silhouette_score(X, etiquetas)),
+        "davies_bouldin": float(davies_bouldin_score(X, etiquetas)),
+        "calinski_harabasz": float(calinski_harabasz_score(X, etiquetas)),
+    }
+
+
+def emparejar_grupos(centros_a: np.ndarray, centros_b: np.ndarray) -> dict:
+    """Mapa grupo_b -> grupo_a que minimiza la distancia entre centroides (Hungarian)."""
+    from scipy.optimize import linear_sum_assignment
+
+    costo = ((centros_a[:, None, :] - centros_b[None, :, :]) ** 2).sum(axis=2)
+    filas, columnas = linear_sum_assignment(costo)
+    return {int(b): int(a) for a, b in zip(filas, columnas)}
+
+
+def bootstrap_diferencias(X, etiquetas_a, etiquetas_b, n_boot: int, semilla: int) -> pd.DataFrame:
+    """Remuestrea estaciones y calcula B - A en cada métrica sobre la misma muestra."""
+    rng = np.random.default_rng(semilla)
+    n = len(X)
+    filas = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, n)
+        m_a = metricas_internas(X[idx], etiquetas_a[idx])
+        m_b = metricas_internas(X[idx], etiquetas_b[idx])
+        filas.append({k: m_b[k] - m_a[k] for k in m_a})
+    return pd.DataFrame(filas).dropna()
+
+
+def proporcion_cambios(pipeline, perfil_entrenamiento: pd.DataFrame, actual: pd.DataFrame) -> dict:
+    """Estaciones comunes que el mismo modelo asigna a otro grupo en el periodo actual."""
+    comunes = perfil_entrenamiento.index.intersection(actual.index)
+    antes = pipeline.predict(perfil_entrenamiento.loc[comunes, P3_VARIABLES])
+    despues = pipeline.predict(actual.loc[comunes, P3_VARIABLES])
+    return {
+        "estaciones_comunes": len(comunes),
+        "cambian_de_grupo": int((antes != despues).sum()),
+        "pct_cambian": float(100 * (antes != despues).mean()),
+    }
+
+
+def decidir_p3(ic_silhouette: tuple, delta_db: float, min_prop_b: float,
+               min_proporcion_grupo: float = 0.05) -> tuple:
+    """Regla de P3 fijada antes de ver resultados. Devuelve (veredicto, cumple)."""
+    cumple = ic_silhouette[0] > 0 and delta_db <= 0 and min_prop_b >= min_proporcion_grupo
+    if ic_silhouette[1] < 0:
+        return "MANTENER CHAMPION (el challenger es peor)", False
+    if cumple:
+        return "PROMOVER CHALLENGER", True
+    return "MANTENER CHAMPION (sin diferencia clara a favor del challenger)", False
 
 
 class EvidentlyMonitor:
@@ -146,6 +211,8 @@ class EvidentlyMonitor:
         abrir_navegador: bool = False,
         registrar_local: bool = True,
         usar_api_evidently: bool = True,
+        nombre_proyecto: str | None = None,
+        descripcion_proyecto: str | None = None,
     ) -> None:
         self.numerical_columns = list(numerical_columns)
         self.categorical_columns = list(categorical_columns or [])
@@ -160,6 +227,8 @@ class EvidentlyMonitor:
         self.abrir_navegador = abrir_navegador
         self.registrar_local = registrar_local
         self.usar_api_evidently = usar_api_evidently
+        self.nombre_proyecto = nombre_proyecto
+        self.descripcion_proyecto = descripcion_proyecto
 
         # Columnas que Evidently va a usar: todas las que pidió el usuario.
         self.all_columns = self.numerical_columns + self.categorical_columns
@@ -569,6 +638,9 @@ class EvidentlyMonitor:
         abrir_navegador: bool | None = None,
         registrar_proyecto_nombre: str = EVIDENTLY_PROJECT_NAME,
         registrar_proyecto_descripcion: str | None = None,
+        log_mlflow: bool = False,
+        mlflow_run_name: str | None = None,
+        experimento: str = MLFLOW_EXPERIMENT_MONITOREO,
     ) -> dict:
         """Ejecuta la comparación completa de drift con registro en Evidently.
 
@@ -694,6 +766,24 @@ class EvidentlyMonitor:
             "reporte_id": reporte_id,
         }
 
+        if log_mlflow:
+            mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
+            mlflow.set_experiment(experimento)
+            with mlflow.start_run(run_name=mlflow_run_name or f"drift_{nombre}"):
+                mlflow.log_params({
+                    "num_method": self.num_method,
+                    "cat_method": self.cat_method,
+                    "num_threshold": self.num_threshold,
+                    "cat_threshold": self.cat_threshold,
+                    "n_ref": len(ref_m),
+                    "n_actual": len(cur_m),
+                    "nombre": nombre,
+                })
+                mlflow.log_metric("vars_con_drift", float(vars_con_drift))
+                mlflow.log_artifact(str(salida_html), artifact_path=f"drift_{nombre}")
+                mlflow.log_artifact(str(scores_csv), artifact_path=f"drift_{nombre}")
+            logger.success(f"Run de MLflow registrado en el experimento {experimento}.")
+
         return resumen
 
     # ------------------------------------------------------------------ #
@@ -741,6 +831,7 @@ class EvidentlyMonitor:
         """
         from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+        mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
         client = MlflowClient()
 
         # Resolver versiones
@@ -919,13 +1010,7 @@ class EvidentlyMonitor:
         import tempfile
 
         import joblib
-        from scipy.optimize import linear_sum_assignment
-        from sklearn.metrics import (
-            adjusted_rand_score,
-            calinski_harabasz_score,
-            davies_bouldin_score,
-            silhouette_score,
-        )
+        from sklearn.metrics import adjusted_rand_score
         from sklearn.preprocessing import StandardScaler
 
         from proyecto_mibici.monitoring.datos_p3 import (
@@ -933,6 +1018,7 @@ class EvidentlyMonitor:
             cargar_conjunto,
         )
 
+        mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
         client = MlflowClient()
 
         # Resolver versiones
@@ -995,38 +1081,15 @@ class EvidentlyMonitor:
                 columns=P3_VARIABLES,
             )
         )
-        costo = ((centros_a[:, None, :] - centros_b[None, :, :]) ** 2).sum(axis=2)
-        filas, columnas = linear_sum_assignment(costo)
-        mapa = {int(b): int(a) for a, b in zip(filas, columnas)}
+        mapa = emparejar_grupos(centros_a, centros_b)
         grupos_b = np.vectorize(mapa.get)(grupos_b_crudos)
 
         # 4. Métricas internas en el mismo espacio
-        def metricas_internas(X_arr: np.ndarray, etiquetas: np.ndarray) -> dict:
-            if len(np.unique(etiquetas)) < 2:
-                return {
-                    "silhouette": np.nan,
-                    "davies_bouldin": np.nan,
-                    "calinski_harabasz": np.nan,
-                }
-            return {
-                "silhouette": float(silhouette_score(X_arr, etiquetas)),
-                "davies_bouldin": float(davies_bouldin_score(X_arr, etiquetas)),
-                "calinski_harabasz": float(calinski_harabasz_score(X_arr, etiquetas)),
-            }
-
         m_a = metricas_internas(X, grupos_a)
         m_b = metricas_internas(X, grupos_b)
 
         # 5. Bootstrap por estación
-        rng = np.random.default_rng(RANDOM_SEED)
-        n = len(X)
-        filas_boot = []
-        for _ in range(n_boot):
-            idx = rng.integers(0, n, n)
-            m_ba = metricas_internas(X[idx], grupos_a[idx])
-            m_bb = metricas_internas(X[idx], grupos_b[idx])
-            filas_boot.append({k: m_bb[k] - m_ba[k] for k in m_ba})
-        boot = pd.DataFrame(filas_boot).dropna()
+        boot = bootstrap_diferencias(X, grupos_a, grupos_b, n_boot, RANDOM_SEED)
         ic = {
             k: (float(boot[k].quantile(0.025)), float(boot[k].quantile(0.975)))
             for k in boot.columns
@@ -1034,22 +1097,10 @@ class EvidentlyMonitor:
         gana_b_pct = float((boot["silhouette"] > 0).mean() * 100)
 
         # 6. Estabilidad: estaciones que cambian de grupo
-        def proporcionar_cambios(
-            pipeline, perfil_entrenamiento: pd.DataFrame, actual_df: pd.DataFrame
-        ) -> dict:
-            comunes = perfil_entrenamiento.index.intersection(actual_df.index)
-            antes = pipeline.predict(perfil_entrenamiento.loc[comunes, P3_VARIABLES])
-            despues = pipeline.predict(actual_df.loc[comunes, P3_VARIABLES])
-            return {
-                "estaciones_comunes": len(comunes),
-                "cambian_de_grupo": int((antes != despues).sum()),
-                "pct_cambian": float(100 * (antes != despues).mean()),
-            }
-
         referencia = cargar_conjunto("referencia")
         reciente = cargar_conjunto("reciente")
-        cambios_a = proporcionar_cambios(modelo_a, referencia, actual)
-        cambios_b = proporcionar_cambios(modelo_b, reciente, actual)
+        cambios_a = proporcion_cambios(modelo_a, referencia, actual)
+        cambios_b = proporcion_cambios(modelo_b, reciente, actual)
 
         # 7. Acuerdo entre versiones (ARI)
         acuerdo = float(adjusted_rand_score(grupos_a, grupos_b))
@@ -1062,13 +1113,7 @@ class EvidentlyMonitor:
 
         # 9. Criterios de decisión
         delta_db = m_b["davies_bouldin"] - m_a["davies_bouldin"]
-        cumple = ic["silhouette"][0] > 0 and delta_db <= 0 and min_prop_b >= min_proporcion_grupo
-        if ic["silhouette"][1] < 0:
-            veredicto = "MANTENER CHAMPION (el challenger es peor)"
-        elif cumple:
-            veredicto = "PROMOVER CHALLENGER"
-        else:
-            veredicto = "MANTENER CHAMPION (sin diferencia clara a favor del challenger)"
+        veredicto, cumple = decidir_p3(ic["silhouette"], delta_db, min_prop_b, min_proporcion_grupo)
 
         # 10. Logs
         logger.info("\nMétricas internas (octubre 2026):")
@@ -1119,8 +1164,8 @@ class EvidentlyMonitor:
     # ------------------------------------------------------------------ #
     def ab_test_p2(
         self,
-        champion_version: Optional[int] = None,
-        challenger_version: Optional[int] = None,
+        champion_version: int | None = None,
+        challenger_version: int | None = None,
         *,
         n_boot: int = 300,
         promover: bool = False,
@@ -1164,6 +1209,7 @@ class EvidentlyMonitor:
             Resumen con métricas de ambas versiones, cambio relativo,
             bootstrap IC95, resultado de McNemar, veredicto y criterios.
         """
+        mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
         client = MlflowClient()
 
         # Resolver versiones
@@ -1360,6 +1406,7 @@ class EvidentlyMonitor:
         """
         import math
 
+        mlflow.set_tracking_uri(URI_MLFLOW_TRACKING)
         client = MlflowClient()
 
         if champion_version is None:
