@@ -195,6 +195,7 @@ cython_debug/
 data/raw/*
 data/interim/*
 data/processed/*
+data/monitoring/
 !data/raw/.gitkeep
 !data/interim/.gitkeep
 !data/processed/.gitkeep
