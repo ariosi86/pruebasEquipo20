@@ -37,6 +37,8 @@ P1_DATASET_PARQUET = INTERIM_DATA_DIR / "p1_modelado.parquet"
 # Nuevo experimento para test A/B y reentrenamiento de P1 (v2)
 #------------------------------------------
 MLFLOW_EXPERIMENT_MONITOREO = "mibici-equipo20-p1-monitoreo"
+# Experimento de monitoreo, reentrenamiento y A/B testing de P3
+MLFLOW_EXPERIMENT_MONITOREO_P3 = "mibici-equipo20-p3-monitoreo"
 
 
 # ==========================================
