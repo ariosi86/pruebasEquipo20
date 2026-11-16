@@ -6,9 +6,9 @@ import pytest
 
 from proyecto_mibici.config import P3_VARIABLES
 from proyecto_mibici.modeling.model_p3 import ClusterKMeansP3
-from proyecto_mibici.monitoring.ab_test_p3 import (
+from proyecto_mibici.monitoring.evidently_monitor import (
     bootstrap_diferencias,
-    decidir,
+    decidir_p3,
     emparejar_grupos,
     metricas_internas,
     proporcion_cambios,
@@ -66,5 +66,5 @@ def test_proporcion_cambios_mismo_perfil(perfil_sintetico):
     ],
 )
 def test_regla_de_decision(ic, delta_db, min_prop, promueve):
-    _, resultado = decidir(ic, delta_db, min_prop)
+    _, resultado = decidir_p3(ic, delta_db, min_prop)
     assert resultado is promueve
