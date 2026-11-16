@@ -1581,7 +1581,7 @@ def ejemplo_p1():
         nombre_proyecto="p1-demanda-horaria",
         descripcion_proyecto="Monitoreo de drift P1: referencia 2025 vs octubre 2026",
     )
-    resumen = monitor.comparar(ref, actual)
+    resumen = monitor.comparar(ref, actual, nombre="ejemplo_p1")
     logger.info(f"Resumen P1: {resumen}")
 
 
