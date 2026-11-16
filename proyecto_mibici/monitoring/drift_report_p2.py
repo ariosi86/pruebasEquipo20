@@ -77,6 +77,8 @@ def main(
         nombre="p2_ref2025_vs_jul_sep2026",
         registrar_proyecto_nombre="p2-riesgo-desequilibrio",
         log_mlflow=registrar,
+        mlflow_run_name="P2_drift_jul_sep2026",
+        experimento="mibici-equipo20-p2-monitoreo",
     )
 
     logger.info(f"Variables con drift: {resumen['vars_con_drift']}")
