@@ -1435,3 +1435,108 @@ El reentrenamiento de P1 tarda unos 10 minutos por el volumen de la tabla estaci
 ### 6. Resultados esperados
 
 Al reproducir el flujo, las decisiones coinciden con el reporte: P1 mantiene el champion (la mejora en MAE no alcanza el umbral de 7.8 % y la deviance empeora), P2 promueve el challenger y P3 mantiene el champion. Las métricas de los reentrenamientos pueden variar en el cuarto decimal entre equipos.
+
+---
+# Entrega 7 Microservicios, CI/CD y FinOps
+
+El sistema completo se levanta con un solo comando de Docker Compose, se prueba y construye en cada push con GitHub Actions, y se evaluó bajo carga con Locust para estimar su costo por inferencia. El reporte con las gráficas y el análisis está en `TC5061_Operacion_FinOps_Equipo20.pdf`.
+
+## 1. Arquitectura de servicios
+
+| Servicio | Imagen | Puerto local | Función |
+|---|---|---|---|
+| `mlflow` | `mibici-mlflow` | 5001 | Tracking y Model Registry. Guarda la base SQLite y los artefactos en el volumen `mlruns`. |
+| `prep` | `mibici-prep` | — | Corre una vez: ingesta, entrenamiento de P1, P2 y P3 y registro de los campeones. Si los tres `@champion` ya existen, termina en segundos. |
+| `api-p1`, `api-p2`, `api-p3` | `mibici-api` | 8001, 8002, 8003 | FastAPI con `/predict`, `/health` y `/docs`. Cada una sirve el campeón de su pregunta. |
+
+Los servicios comparten la red `mibici-net`. Las APIs arrancan cuando MLflow está sano y `prep` terminó bien. Cada contenedor tiene healthcheck, política de reinicio, límites de CPU y memoria y rotación de logs. Los datos de MiBici se montan desde `data/` del host, así la descarga ocurre solo la primera vez. `docker/constraints.txt` fija la misma versión de MLflow, scikit-learn y LightGBM en todas las imágenes para que el modelo entrenado en `prep` se deserialice sin errores en la API.
+
+## 2. Levantar el sistema
+
+Requiere Docker con Compose v2 (o `podman-compose`). Desde la raíz del repositorio:
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
+```
+
+La primera vez `prep` descarga los datos y entrena los modelos (alrededor de 5 minutos con los datos ya descargados). Para revisar el estado y probar una predicción:
+
+```bash
+docker compose -f docker/docker-compose.yml ps
+curl http://localhost:8003/health
+curl -X POST http://localhost:8003/predict -H "Content-Type: application/json" -d '{"pct_manana":0.23,"pct_mediodia":0.33,"pct_tarde":0.29,"pct_noche":0.12,"pct_fin_de_semana":0.20,"duracion_media":11.12,"viajes_dia_log":3.23,"balance_neto":-0.02}'
+```
+
+Para detener los servicios conservando el registry usar `docker compose -f docker/docker-compose.yml down`. Agregar `-v` borra también el volumen con los modelos.
+
+Todas las variables son opcionales y tienen valor por defecto en el compose. Para cambiarlas se copia `docker/.env.example` a `docker/.env`:
+
+| Variable | Defecto | Uso |
+|---|---|---|
+| `API_P1_PUERTO`, `API_P2_PUERTO`, `API_P3_PUERTO`, `MLFLOW_PUERTO` | 8001, 8002, 8003, 5001 | Puertos publicados |
+| `API_CPUS`, `API_MEMORIA` | 1.0, 1g | Límites por API |
+| `MLFLOW_CPUS`, `MLFLOW_MEMORIA` | 1.0, 2g | Límites de MLflow. Con 1 GB y sus workers por defecto, MLflow 3 se reiniciaba por falta de memoria. |
+| `CACHE_TTL_SEG` | 60 | Segundos que cada API reutiliza el modelo antes de volver a consultar el registry. Con 0 lo descarga en cada petición. |
+| `FORZAR_ENTRENAMIENTO` | 0 | Con 1, `prep` reentrena y vuelve a registrar aunque los campeones existan |
+
+## 3. Pipeline de CI/CD
+
+El workflow `.github/workflows/ci.yml` corre en cada push a `main`, `feat/**` y `fix/**`, en cada pull request a `main` y a mano desde la pestaña Actions.
+
+| Job | Qué hace |
+|---|---|
+| `lint` | `ruff` con las reglas de errores que rompen la ejecución (sintaxis y nombres no definidos) |
+| `test` | `pytest tests` en matriz Python 3.10 y 3.11, con caché de pip. Sin datos en el runner, las pruebas que los necesitan se omiten. Publica el reporte JUnit como artefacto. |
+| `build` | Construye las imágenes `api`, `mlflow` y `prep` en paralelo con caché de capas de BuildKit |
+| `smoke` | Carga las imágenes, valida el compose, levanta MLflow y las tres APIs y comprueba que respondan |
+| `publish` | En push a `main`, publica las tres imágenes en GitHub Container Registry (`ghcr.io/<owner>/mibici-*`) |
+
+Un push nuevo a la misma rama cancela la corrida anterior. El workflow también se puede ejecutar en local, sin subir nada, con [act](https://github.com/nektos/act):
+
+```bash
+act push -P ubuntu-latest=catthehacker/ubuntu:act-latest --artifact-server-path /tmp/act-artifacts
+```
+
+`proyecto_mibici/monitoring/test_evidently_registro.py` queda fuera del CI porque necesita un servidor de Evidently Platform en el puerto 8000.
+
+## 4. Pruebas de carga y consumo de recursos
+
+La carpeta `locust/` contiene el escenario de carga y los scripts de análisis:
+
+| Archivo | Uso |
+|---|---|
+| `locustfile.py` | Un tipo de usuario por API. Genera payloads aleatorios que respetan las validaciones de `schemas.py`, manda un 5 % de peticiones inválidas que deben responder 422 y consulta `/health` de vez en cuando. |
+| `monitor_recursos.py` | Registra `docker stats` de cada contenedor en un CSV mientras corre la carga |
+| `ejecutar_carga.sh` | Mide un minuto de reposo y corre los escenarios de 10, 50 y 100 usuarios de 3 minutos con el monitor en paralelo |
+| `graficas.py` | Genera la tabla resumen y las gráficas de throughput, latencia, errores y recursos |
+| `finops.py` | Calcula el costo por inferencia y el costo mensual de cada opción de despliegue |
+
+Con el sistema levantado, el entorno virtual del proyecto activo y `locust` instalado (`pip install locust`). En Windows los scripts `.sh` se corren desde Git Bash:
+
+```bash
+bash locust/ejecutar_carga.sh cache_          # configuración por defecto, unos 11 minutos
+CACHE_TTL_SEG=0 docker compose -f docker/docker-compose.yml up -d
+bash locust/ejecutar_carga.sh                 # línea base: modelo descargado en cada petición
+python locust/finops.py --prefijos "" cache_  # comparación de costos
+```
+
+Para medir la capacidad máxima se quita el tiempo de espera entre peticiones:
+
+```bash
+LOCUST_ESPERA_MIN=0 LOCUST_ESPERA_MAX=0 locust -f locust/locustfile.py --headless -u 30 -r 10 -t 2m --csv reports/locust/estres_u30
+```
+
+Las salidas quedan en `reports/locust/`: CSV de Locust y de recursos, reportes HTML de Locust y figuras PNG.
+
+## 5. Resultados principales
+
+| 100 usuarios concurrentes | Modelo descargado en cada petición | Caché del modelo (60 s) |
+|---|---|---|
+| Inferencias por segundo | 3.3 | 67.1 |
+| Latencia p95 | 31 s | 120 ms |
+| Tasa de error | 0.91 % | 0 % |
+| CPU por inferencia | 376 ms | 11 ms |
+
+La prueba de carga mostró que MLflow era el cuello de botella. Cada predicción le pedía el modelo al registry, MLflow se saturaba al 100 % de su CPU y el throughput bajaba al subir los usuarios. También exhibió una condición de carrera en `api-p1`, donde dos peticiones descargaban el modelo al mismo directorio temporal y una lo leía incompleto. La caché con candado de `docker/api/app.py` corrigió ambos problemas y conserva la actualización automática del campeón, que se refresca cada `CACHE_TTL_SEG` segundos. En la prueba de estrés el sistema atendió 135 inferencias por segundo sin errores, unas 49 por vCPU de API.
+
+Con el tráfico estimado de MiBici (unas 14,700 inferencias diarias) el sistema usa menos del 1 % de su capacidad, y el costo mensual depende casi por completo del tamaño de la máquina encendida. El reporte detalla el cálculo y las optimizaciones propuestas.
