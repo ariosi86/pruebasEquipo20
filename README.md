@@ -1481,6 +1481,7 @@ Todas las variables son opcionales y tienen valor por defecto en el compose. Par
 
 ## 3. Pipeline de CI/CD
 
+
 El workflow `.github/workflows/ci.yml` corre en cada push a `main`, `feat/**` y `fix/**`, en cada pull request a `main` y a mano desde la pestaña Actions.
 
 | Job | Qué hace |
@@ -1498,6 +1499,10 @@ act push -P ubuntu-latest=catthehacker/ubuntu:act-latest --artifact-server-path 
 ```
 
 `proyecto_mibici/monitoring/test_evidently_registro.py` queda fuera del CI porque necesita un servidor de Evidently Platform en el puerto 8000.
+
+![CI](https://github.com/ariosi86/TC5061-Proyecto-Equipo20/actions/workflows/ci.yml/badge.svg)
+
+Se ejecuta solo en cada push o pull request. Para lanzarlo a mano: pestaña Actions → CI → Run workflow. El estado verde indica que pasaron lint, pruebas, construcción y prueba de humo.
 
 ## 4. Pruebas de carga y consumo de recursos
 
@@ -1528,15 +1533,90 @@ LOCUST_ESPERA_MIN=0 LOCUST_ESPERA_MAX=0 locust -f locust/locustfile.py --headles
 
 Las salidas quedan en `reports/locust/`: CSV de Locust y de recursos, reportes HTML de Locust y figuras PNG.
 
+### Prueba de estrés completa
+
+```bash
+python locust/monitor_recursos.py --salida reports/locust/estres_u30_recursos.csv --duracion 125 &
+LOCUST_ESPERA_MIN=0 LOCUST_ESPERA_MAX=0 locust -f locust/locustfile.py --headless -u 30 -r 10 -t 2m \
+  --csv reports/locust/estres_u30 --html reports/locust/estres_u30.html --only-summary
+python locust/graficas.py --escenarios estres_u30 --prefijo estres_
+python locust/finops.py --prefijos base_ cache_
+```
+
 ## 5. Resultados principales
+
+Resultados medidos en un MacBook Pro con Apple M5 (10 núcleos, 32 GB), Docker Desktop con 10 CPUs y 8 GB, imágenes arm64. Los valores absolutos dependen del equipo.
 
 | 100 usuarios concurrentes | Modelo descargado en cada petición | Caché del modelo (60 s) |
 |---|---|---|
-| Inferencias por segundo | 3.3 | 67.1 |
-| Latencia p95 | 31 s | 120 ms |
-| Tasa de error | 0.91 % | 0 % |
-| CPU por inferencia | 376 ms | 11 ms |
+| Inferencias por segundo | 14.0 | 70.9 |
+| Latencia p95 | 7.1 s | 14 ms |
+| Tasa de error | 4.1 % | 0 % |
+| CPU por inferencia | 93.5 ms | 4.2 ms |
 
-La prueba de carga mostró que MLflow era el cuello de botella. Cada predicción le pedía el modelo al registry, MLflow se saturaba al 100 % de su CPU y el throughput bajaba al subir los usuarios. También exhibió una condición de carrera en `api-p1`, donde dos peticiones descargaban el modelo al mismo directorio temporal y una lo leía incompleto. La caché con candado de `docker/api/app.py` corrigió ambos problemas y conserva la actualización automática del campeón, que se refresca cada `CACHE_TTL_SEG` segundos. En la prueba de estrés el sistema atendió 135 inferencias por segundo sin errores, unas 49 por vCPU de API.
+La prueba de carga mostró que MLflow era el cuello de botella. Cada predicción le pedía el modelo al registry, MLflow se saturaba al 100 % de su CPU y el throughput bajaba al subir los usuarios. También exhibió una condición de carrera en `api-p1`, donde dos peticiones descargaban el modelo al mismo directorio temporal y una lo leía incompleto. La caché con candado de `docker/api/app.py` corrigió ambos problemas y conserva la actualización automática del campeón, que se refresca cada `CACHE_TTL_SEG` segundos. En la prueba de estrés el sistema atendió 1,657 inferencias por segundo, unas 615 por vCPU de API, con p95 de 69 ms y sin errores.
 
-Con el tráfico estimado de MiBici (unas 14,700 inferencias diarias) el sistema usa menos del 1 % de su capacidad, y el costo mensual depende casi por completo del tamaño de la máquina encendida. El reporte detalla el cálculo y las optimizaciones propuestas.
+Con el tráfico estimado de MiBici (unas 14,700 inferencias diarias) el sistema usa cerca del 1 % de su capacidad, y el costo mensual depende casi por completo del tamaño de la máquina encendida. El reporte detalla el cálculo y las optimizaciones propuestas.
+
+## 6. Análisis FinOps
+
+`locust/finops.py` estima el costo por inferencia a partir de las pruebas de carga y del consumo medido con `docker stats`. El reporte (`TC5061_Operacion_FinOps_Equipo20.pdf`) detalla el cálculo y la discusión.
+
+### Método y supuestos
+
+| Elemento | Valor |
+|---|---|
+| Precios de referencia | AWS us-east-1, Linux, on-demand (consultados el 18 de noviembre de 2026) |
+| Costo por consumo | 0.04048 USD por vCPU-hora y 0.004445 USD por GB-hora (modelo de Fargate), con el CPU y la memoria medidos de todos los contenedores, MLflow incluido |
+| Costo por capacidad reservada | Costo mensual de la instancia encendida 24/7 (730 h) entre las inferencias del mes |
+| Tráfico estimado | 14,700 inferencias al día (441,000 al mes): 300 estaciones × 24 h × 2 preguntas (P1 y P2) + 300 reasignaciones diarias de grupo (P3) |
+| Descuento Spot | 65 % (supuesto, no cotización) |
+
+Los precios y el tráfico son constantes al inicio de `locust/finops.py` y se pueden cambiar.
+
+### Resultados principales
+
+| | Sin caché | Con caché |
+|---|---|---|
+| CPU por inferencia (100 usuarios) | 98.8 ms | 4.4 ms |
+| Costo por consumo (USD por 1,000 inferencias) | 0.0013 | 0.0001 |
+| Capacidad máxima medida | n/a | 1,657 inferencias/s (unas 615 por vCPU de API) |
+
+Las cifras de CPU y capacidad se calculan con los resultados de las pruebas y varían con el equipo; los precios y el tráfico son supuestos fijos del script
+
+Con el tráfico estimado, el sistema usa cerca del 0.01 % de esa capacidad, por lo que el costo mensual lo determina la instancia encendida y no el cómputo de las inferencias:
+
+| Instancia | vCPU / RAM | USD al mes | USD por 1,000 inferencias |
+|---|---|---|---|
+| t3.small | 2 / 2 GiB | 15.18 | 0.0344 |
+| t3.medium | 2 / 4 GiB | 30.37 | 0.0689 |
+| t3.large | 2 / 8 GiB | 60.74 | 0.1377 |
+| m6i.xlarge | 4 / 16 GiB | 140.16 | 0.3178 |
+
+La memoria medida del sistema completo fue de unos 2.0-2.1 GiB con caché (MLflow 1.2 GiB y las tres APIs unos 0.85) y de hasta 3.5 GiB sin caché, así que una t3.small (2 GiB) no alcanza y una t3.medium (4 GiB) sí, incluso en el peor caso medido. El CPU realmente consumido por las inferencias costaría unos 0.02 USD al mes.
+
+### Optimizaciones propuestas
+
+| Optimización | USD al mes | Ahorro frente a t3.large |
+|---|---|---|
+| Mantener la caché del modelo (`CACHE_TTL_SEG=60`) | n/a | Habilita las demás |
+| Ajustar a t3.medium | 30.37 | 50 % |
+| Sacar MLflow de la ruta de servicio y correr las APIs en t3.small | 15.18 | 75 % |
+| t3.small en Spot (solo APIs) | 5.31 | 91 % |
+
+La tercera opción requiere un cambio de diseño: las APIs consultan el registry cada `CACHE_TTL_SEG` segundos, así que MLflow no puede apagarse sin incluir el modelo en la imagen o alargar el tiempo de caché. El costo de ejecutar MLflow para entrenar y registrar no está incluido.
+
+### Reproducir el análisis
+
+Con los resultados de las pruebas de carga ya generados (sección 4):
+
+```bash
+python locust/graficas.py --escenarios estres_u30 --prefijo estres_
+python locust/finops.py --prefijos base_ cache_
+```
+
+Las salidas quedan en `reports/locust/`: `finops_costos.csv`, `finops_optimizaciones.csv` y las figuras `comparacion_cache.png`, `finops_optimizaciones.png` y `finops_costo_por_inferencia.png`.
+
+### Limitaciones
+
+Las pruebas corrieron en un solo equipo (MacBook Pro M5, imágenes `arm64`) con el generador de carga en la misma máquina. La capacidad por vCPU es una referencia, no una garantía en instancias de la nube: las t3 acumulan

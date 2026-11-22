@@ -150,7 +150,9 @@ def main() -> None:
 
     # Optimizaciones: costo mensual del sistema de servicio encendido 24/7 con el tráfico real
     usd = {k: v[2] * HORAS_MES for k, v in INSTANCIAS.items()}
-    consumo_cpu_h = inferencias_mes * 0.0112 / 3600  # 11.2 ms de CPU por inferencia (con caché, 100 usuarios)
+    # CPU por inferencia medido con caché (última configuración pasada en --prefijos, mayor carga)
+    cpu_s_por_inf = tabla.iloc[-1]["cpu_ms_por_inferencia"] / 1000
+    consumo_cpu_h = inferencias_mes * cpu_s_por_inf / 3600
     opciones = [
         ("Referencia: t3.large on-demand (8 GiB de holgura)", usd["t3.large"]),
         ("Ajuste de tamaño: t3.medium (2.5 GiB medidos caben en 4)", usd["t3.medium"]),

@@ -15,6 +15,7 @@ x-api: &api
     # Segundos que la API reutiliza el modelo antes de volver a consultar MLflow.
     # 0 = descarga en cada petición (línea base de la prueba de carga; satura MLflow)
     CACHE_TTL_SEG: ${CACHE_TTL_SEG:-60}
+    MODEL_CACHE_TTL: ${CACHE_TTL_SEG:-60}
   volumes:
     - mlruns:/app/mlruns
   networks:
