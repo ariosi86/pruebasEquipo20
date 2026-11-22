@@ -131,13 +131,13 @@ services:
     ports:
       - "8089:8089"
     environment:
-      - API_P1_URL=http://api-p1:8000
-      - API_P2_URL=http://api-p2:8000
-      - API_P3_URL=http://api-p3:8000
+      - LOCUST_HOST_P1=http://api-p1:8000
+      - LOCUST_HOST_P2=http://api-p2:8000
+      - LOCUST_HOST_P3=http://api-p3:8000
     volumes:
-      - ../locustfile.py:/mnt/locust/locustfile.py:ro
+      - ../locust/locustfile.py:/mnt/locust/locustfile.py:ro
       - ../reports/locust:/mnt/locust/reports
-    command: -f /mnt/locust/locustfile.py --host http://api-p1:8000
+    command: -f /mnt/locust/locustfile.py
     networks:
       - mibici-net
     depends_on:
