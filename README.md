@@ -1619,4 +1619,34 @@ Las salidas quedan en `reports/locust/`: `finops_costos.csv`, `finops_optimizaci
 
 ### Limitaciones
 
-Las pruebas corrieron en un solo equipo (MacBook Pro M5, imágenes `arm64`) con el generador de carga en la misma máquina. La capacidad por vCPU es una referencia, no una garantía en instancias de la nube: las t3 acumulan
+Estas cifras se midieron en un MacBook Pro M5 con imágenes arm64 y el generador de carga en la misma máquina, así que son solo una referencia. Las t3 acumulan créditos de CPU cuando operan por debajo de su línea base y los gastan al superarla. Con carga sostenida, en modo standard el rendimiento puede limitarse al agotarse los créditos; en modo unlimited, el predeterminado en T3, pueden generarse cargos adicionales que esta estimación no incluye. Como las t3 son x86, habría que construir imágenes amd64 y repetir las pruebas para conocer su capacidad real.
+
+---
+
+# Entrega Final
+
+Esta es la forma actual de ejecutar el proyecto. Las secciones por entrega
+se conservan como historial y algunos de sus comandos corresponden a etapas anteriores.
+
+### Levantar el sistema
+
+Requiere Docker con Compose v2. Desde la raíz:
+
+    docker compose -f docker/docker-compose.yml up -d --build
+    docker compose -f docker/docker-compose.yml ps
+
+| Servicio | URL |
+|---|---|
+| MLflow | http://localhost:5001 |
+| API P1 | http://localhost:8001/docs |
+| API P2 | http://localhost:8002/docs |
+| API P3 | http://localhost:8003/docs |
+
+Para detener: docker compose -f docker/docker-compose.yml down
+(con -v también se borra el volumen de modelos).
+
+### Documentación
+- API y contenedores (Entrega 4)
+- Monitoreo y A/B (Entrega 5)
+- CI/CD, Locust y FinOps (Entrega 7)
+- Model Cards: docs/model_cards.md
