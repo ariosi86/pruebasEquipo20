@@ -1628,25 +1628,62 @@ Estas cifras se midieron en un MacBook Pro M5 con imágenes arm64 y el generador
 Esta es la forma actual de ejecutar el proyecto. Las secciones por entrega
 se conservan como historial y algunos de sus comandos corresponden a etapas anteriores.
 
-### Levantar el sistema
+### Levantar el sistema completo
 
-Requiere Docker con Compose v2. Desde la raíz:
+Requiere Docker con Compose v2. Desde la raíz del repositorio:
 
-    docker compose -f docker/docker-compose.yml up -d --build
-    docker compose -f docker/docker-compose.yml ps
+```bash
+# 1. Construir imágenes (evita colisión paralela sobre el tag compartido mibici-api:latest)
+docker compose -f docker/docker-compose.yml build api-p1 mlflow prep evidently
 
-| Servicio | URL |
-|---|---|
-| MLflow | http://localhost:5001 |
-| API P1 | http://localhost:8001/docs |
-| API P2 | http://localhost:8002/docs |
-| API P3 | http://localhost:8003/docs |
+# 2. Levantar servicios principales + Locust (UI de pruebas de carga)
+docker compose -f docker/docker-compose.yml --profile loadtest up -d --no-build
 
-Para detener: docker compose -f docker/docker-compose.yml down
-(con -v también se borra el volumen de modelos).
+# 3. Verificar estado de los contenedores
+docker compose -f docker/docker-compose.yml --profile loadtest ps
+```
+
+| Servicio | URL / Puerto | Descripción |
+|---|---|---|
+| MLflow UI & Registry | http://localhost:5001 | Experimentos y campeones `@champion` |
+| Evidently UI | http://localhost:8000 | Consola de monitoreo y reportes de drift |
+| API P1 (Swagger) | http://localhost:8001/docs | Demanda horaria (`LightGBM Tweedie`) |
+| API P2 (Swagger) | http://localhost:8002/docs | Riesgo de desbalance (`GBM`) |
+| API P3 (Swagger) | http://localhost:8003/docs | Clustering de estaciones (`KMeans K=4`) |
+| Locust UI | http://localhost:8089 | Pruebas de carga (perfil `loadtest`) |
+
+Para detener conservando los volúmenes (`mlruns` y `evidently_workspace`):
+```bash
+docker compose -f docker/docker-compose.yml --profile loadtest down
+```
+*(Agregar `-v` borra también los volúmenes persistentes de modelos y monitoreo).*
+
+### Imágenes y resultados en CI/CD (GitHub Actions & GHCR)
+
+El pipeline [`.github/workflows/ci.yml`](.github/workflows/ci.yml) ejecuta `lint` (`ruff`), `test` (`pytest` en Python 3.10 y 3.11), `build`, `smoke` (levanta `mlflow`, `evidently` y las 3 APIs) y `publish` (en push a `main`).
+
+- **Ver ejecuciones, logs de `smoke` y reportes `pytest`:**
+  [Actions → CI/CD MiBici](https://github.com/ariosi86/TC5061-Proyecto-Equipo20/actions/workflows/ci.yml)
+- **Imágenes publicadas en GitHub Container Registry (`ghcr.io`):**
+  - `ghcr.io/ariosi86/mibici-api:latest`
+  - `ghcr.io/ariosi86/mibici-mlflow:latest`
+  - `ghcr.io/ariosi86/mibici-prep:latest`
+  - `ghcr.io/ariosi86/mibici-evidently:latest`
+
+Para descargar y ejecutar directamente una imagen publicada desde GHCR:
+```bash
+# Si el paquete es privado, autenticar primero con un PAT (read:packages):
+# echo $GITHUB_TOKEN | docker login ghcr.io -u <tu_usuario> --password-stdin
+
+docker pull ghcr.io/ariosi86/mibici-api:latest
+docker pull ghcr.io/ariosi86/mibici-mlflow:latest
+docker pull ghcr.io/ariosi86/mibici-prep:latest
+docker pull ghcr.io/ariosi86/mibici-evidently:latest
+```
 
 ### Documentación
 - API y contenedores (Entrega 4)
 - Monitoreo y A/B (Entrega 5)
 - CI/CD, Locust y FinOps (Entrega 7)
-- Model Cards: docs/model_cards.md
+- Model Cards: [docs/model_cards.md](docs/model_cards.md)
+- Guion de demo para video: [script-video.md](script-video.md)

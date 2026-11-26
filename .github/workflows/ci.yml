@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        imagen: [api, mlflow, prep]
+        imagen: [api, mlflow, prep, evidently]
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -116,13 +116,13 @@ jobs:
       - name: Cargar imágenes construidas
         run: |
           for f in /tmp/imagenes/*.tar; do docker load -i "$f"; done
-          for i in api mlflow; do docker tag mibici-$i:${{ github.sha }} mibici-$i:latest; done
+          for i in api mlflow evidently; do docker tag mibici-$i:${{ github.sha }} mibici-$i:latest; done
       - name: Validar docker-compose.yml
         run: docker compose -f docker/docker-compose.yml config -q
-      # prep (descarga de datos y entrenamiento) no corre en CI: se levantan MLflow y las APIs
+      # prep (descarga de datos y entrenamiento) no corre en CI: se levantan MLflow, Evidently y las APIs
       # y se comprueba que cada servicio arranque y responda.
-      - name: Levantar MLflow
-        run: docker compose -f docker/docker-compose.yml up -d --no-build --no-deps --wait mlflow
+      - name: Levantar MLflow y Evidently
+        run: docker compose -f docker/docker-compose.yml up -d --no-build --no-deps --wait mlflow evidently
       - name: Levantar APIs
         run: docker compose -f docker/docker-compose.yml up -d --no-build --no-deps api-p1 api-p2 api-p3
       # Las verificaciones corren dentro de cada contenedor (docker exec): funcionan igual en
@@ -130,6 +130,7 @@ jobs:
       - name: Verificar servicios
         run: |
           docker exec mlflow python -c "import urllib.request as u; print('mlflow /health', u.urlopen('http://localhost:5000/health', timeout=5).status)"
+          docker exec evidently python -c "import urllib.request as u; print('evidently /api/version', u.urlopen('http://localhost:8000/api/version', timeout=5).status)"
           for api in api-p1 api-p2 api-p3; do
             docker exec -i $api python - <<'EOF'
           import time, urllib.request as u, urllib.error as e, os
@@ -161,14 +162,14 @@ jobs:
   publish:
     name: Publicar imagen ${{ matrix.imagen }} en GHCR
     needs: smoke
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     strategy:
       matrix:
-        imagen: [api, mlflow, prep]
+        imagen: [api, mlflow, prep, evidently]
     steps:
       - uses: actions/download-artifact@v4
         with:
