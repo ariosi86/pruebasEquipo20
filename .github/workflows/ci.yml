@@ -224,6 +224,7 @@ jobs:
       - name: Prueba de carga con Locust (headless 15s)
         run: |
           mkdir -p reports/locust
+          chmod 777 reports/locust
           docker compose -f docker/docker-compose.yml --profile loadtest run --rm --no-deps locust \
             -f /mnt/locust/locustfile.py --headless -u 6 -r 3 -t 15s \
             --only-summary --csv /mnt/locust/reports/ci_smoke --html /mnt/locust/reports/ci_smoke.html
