@@ -129,7 +129,8 @@ jobs:
           import joblib, mlflow, numpy as np, pandas as pd
           from mlflow.tracking import MlflowClient
           from sklearn.cluster import KMeans
-          from sklearn.linear_model import LinearRegression, LogisticRegression
+          from sklearn.dummy import DummyRegressor
+          from sklearn.linear_model import LogisticRegression
 
           mlflow.set_tracking_uri("http://mlflow:5000")
           client = MlflowClient("http://mlflow:5000")
@@ -145,7 +146,7 @@ jobs:
               "rolling_3h": rng.uniform(0, 10, 20),
               "rolling_168h": rng.uniform(0, 10, 20),
           })
-          m_p1 = LinearRegression().fit(df_p1, rng.uniform(0, 10, 20))
+          m_p1 = DummyRegressor(strategy="constant", constant=5.0).fit(df_p1, rng.uniform(0, 10, 20))
 
           df_p2 = pd.DataFrame({
               "hora_del_dia": rng.integers(0, 24, 20),
