@@ -266,7 +266,7 @@ jobs:
       - name: Etiquetar y subir
         run: |
           docker load -i /tmp/mibici-${{ matrix.imagen }}.tar
-          destino=${{ env.REGISTRO }}/${GITHUB_REPOSITORY_OWNER,,}/mibici-${{ matrix.imagen }}
+          destino=${{ env.REGISTRO }}/${GITHUB_REPOSITORY,,}/mibici-${{ matrix.imagen }}
           for tag in ${{ github.sha }} latest; do
             docker tag mibici-${{ matrix.imagen }}:${{ github.sha }} $destino:$tag
             docker push $destino:$tag
