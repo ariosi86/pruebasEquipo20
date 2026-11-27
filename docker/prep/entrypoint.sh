@@ -69,21 +69,23 @@ if python - <<'EOF'
 import json, os, sys, urllib.request
 
 url = os.environ.get("EVIDENTLY_API_URL", "http://evidently:8000").rstrip("/")
+esperados = {"p1-demanda-horaria", "p2-riesgo-desequilibrio", "mibici-equipo20-p3"}
 try:
     with urllib.request.urlopen(f"{url}/api/v2/projects", timeout=5) as r:
         proyectos = json.loads(r.read().decode("utf-8"))
-        if len(proyectos) >= 3:
+        nombres = {p.get("name") for p in proyectos}
+        if esperados.issubset(nombres):
             sys.exit(0)
 except Exception:
     pass
 sys.exit(1)
 EOF
 then
-  echo "==> Evidently UI ya tiene proyectos registrados; se omite el envío de drift."
+  echo "==> Evidently UI ya tiene los 3 proyectos (P1, P2, P3) registrados; se omite el envío de drift."
 else
   echo "==> Paso 6: Generando y enviando reportes de drift (P1, P2, P3) a Evidently UI..."
   python -m proyecto_mibici.monitoring.drift_report
   python -m proyecto_mibici.monitoring.datos_p2 && python -m proyecto_mibici.monitoring.drift_report_p2
-  python -m proyecto_mibici.monitoring.datos_p3 && python -m proyecto_mibici.monitoring.drift_report_p3
+  python -m proyecto_mibici.monitoring.datos_p3 && python -m proyecto_mibici.monitoring.drift_report_p3 --api-evidently
   echo "==> Reportes de drift enviados a Evidently UI."
 fi
