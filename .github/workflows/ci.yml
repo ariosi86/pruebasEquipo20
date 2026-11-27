@@ -116,15 +116,89 @@ jobs:
       - name: Cargar imágenes construidas
         run: |
           for f in /tmp/imagenes/*.tar; do docker load -i "$f"; done
-          for i in api mlflow evidently; do docker tag mibici-$i:${{ github.sha }} mibici-$i:latest; done
+          for i in api mlflow evidently prep; do docker tag mibici-$i:${{ github.sha }} mibici-$i:latest; done
       - name: Validar docker-compose.yml
         run: docker compose -f docker/docker-compose.yml config -q
-      # prep (descarga de datos y entrenamiento) no corre en CI: se levantan MLflow, Evidently y las APIs
-      # y se comprueba que cada servicio arranque y responda.
+      # Se levantan MLflow y Evidently; luego se registran 3 modelos mínimos sintéticos como @champion
+      # en prep (sin descargar 8.5M de viajes) para que las APIs y Locust prueben /predict real.
       - name: Levantar MLflow y Evidently
         run: docker compose -f docker/docker-compose.yml up -d --no-build --no-deps --wait mlflow evidently
+      - name: Registrar modelos mínimos de prueba en MLflow
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm --no-deps --entrypoint python prep - <<'EOF'
+          import joblib, mlflow, numpy as np, pandas as pd
+          from mlflow.tracking import MlflowClient
+          from sklearn.cluster import KMeans
+          from sklearn.linear_model import LinearRegression, LogisticRegression
+
+          mlflow.set_tracking_uri("http://mlflow:5000")
+          client = MlflowClient("http://mlflow:5000")
+          rng = np.random.default_rng(42)
+
+          df_p1 = pd.DataFrame({
+              "lag_1h": rng.uniform(0, 10, 20),
+              "lag_24h": rng.uniform(0, 10, 20),
+              "lag_168h": rng.uniform(0, 10, 20),
+              "target_hour_sin": rng.uniform(-1, 1, 20),
+              "target_hour_cos": rng.uniform(-1, 1, 20),
+              "target_is_weekend": rng.integers(0, 2, 20),
+              "rolling_3h": rng.uniform(0, 10, 20),
+              "rolling_168h": rng.uniform(0, 10, 20),
+          })
+          m_p1 = LinearRegression().fit(df_p1, rng.uniform(0, 10, 20))
+
+          df_p2 = pd.DataFrame({
+              "hora_del_dia": rng.integers(0, 24, 20),
+              "dia_semana": rng.integers(0, 7, 20),
+              "fin_de_semana": rng.integers(0, 2, 20),
+              "capacidad": rng.integers(12, 40, 20),
+              "salidas": rng.integers(0, 15, 20),
+              "llegadas": rng.integers(0, 15, 20),
+              "balance_acumulado_dia": rng.integers(-10, 10, 20),
+              "acumulado_relativo": rng.uniform(-1, 1, 20),
+              "balance_ult_3h_relativo": rng.uniform(-1, 1, 20),
+              "riesgo_vacia": rng.integers(0, 2, 20),
+              "riesgo_llena": rng.integers(0, 2, 20),
+          })
+          y_p2 = np.array([False, True] * 10)
+          m_p2 = LogisticRegression(max_iter=200).fit(df_p2, y_p2)
+
+          df_p3 = pd.DataFrame({
+              "pct_manana": rng.uniform(0, 0.3, 20),
+              "pct_mediodia": rng.uniform(0, 0.3, 20),
+              "pct_tarde": rng.uniform(0, 0.3, 20),
+              "pct_noche": rng.uniform(0, 0.2, 20),
+              "pct_fin_de_semana": rng.uniform(0, 0.5, 20),
+              "duracion_media": rng.uniform(5, 30, 20),
+              "viajes_dia_log": rng.uniform(0.5, 4, 20),
+              "balance_neto": rng.uniform(-0.5, 0.5, 20),
+          })
+          m_p3 = KMeans(n_clusters=4, n_init=1, random_state=42).fit(df_p3)
+
+          modelos = [
+              ("mibici-equipo20-p1-demanda", m_p1),
+              ("mibici-equipo20-p2-riesgo", m_p2),
+              ("mibici-equipo20-p3-grupos", m_p3),
+          ]
+          mlflow.set_experiment("ci-smoke")
+          for reg_name, modelo in modelos:
+              with mlflow.start_run(run_name=f"smoke-{reg_name}") as run:
+                  joblib.dump(modelo, "/tmp/modelo.pkl")
+                  mlflow.log_artifact("/tmp/modelo.pkl", artifact_path="model")
+                  try:
+                      client.create_registered_model(reg_name)
+                  except Exception:
+                      pass
+                  mv = client.create_model_version(
+                      name=reg_name,
+                      source=f"runs:/{run.info.run_id}/model",
+                      run_id=run.info.run_id,
+                  )
+                  client.set_registered_model_alias(reg_name, "champion", mv.version)
+          print("Modelos mínimos registrados como @champion")
+          EOF
       - name: Levantar APIs
-        run: docker compose -f docker/docker-compose.yml up -d --no-build --no-deps api-p1 api-p2 api-p3
+        run: docker compose -f docker/docker-compose.yml up -d --no-build --no-deps --wait api-p1 api-p2 api-p3
       # Las verificaciones corren dentro de cada contenedor (docker exec): funcionan igual en
       # GitHub y al ejecutar el workflow en local con act, donde el runner es otro contenedor.
       - name: Verificar servicios
@@ -133,7 +207,7 @@ jobs:
           docker exec evidently python -c "import urllib.request as u; print('evidently /api/version', u.urlopen('http://localhost:8000/api/version', timeout=5).status)"
           for api in api-p1 api-p2 api-p3; do
             docker exec -i $api python - <<'EOF'
-          import time, urllib.request as u, urllib.error as e, os
+          import time, urllib.request as u, os
           for intento in range(20):
               try:
                   print(os.environ["PREGUNTA"], "/docs", u.urlopen("http://localhost:8000/docs", timeout=5).status)
@@ -142,16 +216,23 @@ jobs:
                   time.sleep(3)
           else:
               raise SystemExit("la API no respondió en /docs")
-          # Sin campeones registrados /health responde 503 con JSON: el servicio está vivo
-          try:
-              r = u.urlopen("http://localhost:8000/health", timeout=15)
-              codigo, cuerpo = r.status, r.read()
-          except e.HTTPError as err:
-              codigo, cuerpo = err.code, err.read()
-          print(os.environ["PREGUNTA"], "/health", codigo, cuerpo[:120])
-          assert codigo in (200, 503), codigo
+          r = u.urlopen("http://localhost:8000/health", timeout=15)
+          print(os.environ["PREGUNTA"], "/health", r.status, r.read()[:120])
+          assert r.status == 200, r.status
           EOF
           done
+      - name: Prueba de carga con Locust (headless 15s)
+        run: |
+          mkdir -p reports/locust
+          docker compose -f docker/docker-compose.yml --profile loadtest run --rm --no-deps locust \
+            -f /mnt/locust/locustfile.py --headless -u 6 -r 3 -t 15s \
+            --only-summary --csv /mnt/locust/reports/ci_smoke --html /mnt/locust/reports/ci_smoke.html
+      - name: Guardar reporte de Locust
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: locust-smoke-report
+          path: reports/locust/ci_smoke*
       - name: Logs de los contenedores
         if: failure()
         run: docker compose -f docker/docker-compose.yml logs --tail 50
